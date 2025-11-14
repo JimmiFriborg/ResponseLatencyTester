@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Latency Tester v3.8</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        .row-pass { background-color: rgba(34, 197, 94, 0.1); }
+        .row-fail { background-color: rgba(239, 68, 68, 0.1); }
+        .row-error { background-color: rgba(251, 191, 36, 0.1); }
+        .row-excluded { background-color: rgba(156, 163, 175, 0.1); }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const LatencyTester = () => {
+            // State management
+            const [testCases, setTestCases] = useState([]);
+            const [activeTestCase, setActiveTestCase] = useState(null);
+            const [activeExecution, setActiveExecution] = useState(null);
+            const [comparisonExecutions, setComparisonExecutions] = useState([]);
+            const [view, setView] = useState('execution'); // execution, comparison, report
+            const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
+            const [axisGroupingEnabled, setAxisGroupingEnabled] = useState(true);
+
+            const importRef = useRef(null);
+
+            // Icons
+            const Icon = ({ name }) => {
+                const icons = {
+                    'plus': '➕', 'trash-2': '🗑️', 'download': '⬇️', 'upload': '⬆️',
+                    'edit': '✏️', 'save': '💾', 'x': '❌', 'check': '✅',
+                    'bar-chart': '📊', 'settings': '⚙️', 'file-text': '📄',
+                    'eye': '👁️', 'git-compare': '🔄'
+                };
+                return <span>{icons[name] || '•'}</span>;
+            };
+
+            // Parse timecode with FPS defaulting
+            const parseTimecode = (timecode, fps = 30) => {
+                const parts = timecode.split(':');
+                if (parts.length !== 4) return 0;
+
+                const hours = parseInt(parts[0]) || 0;
+                const minutes = parseInt(parts[1]) || 0;
+                const seconds = parseInt(parts[2]) || 0;
+                const frames = parseInt(parts[3]) || 0;
+
+                const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+                const frameTime = frames / fps;
+
+                return (totalSeconds + frameTime) * 1000;
+            };
+
+            const msToSecondsFormat = (ms) => (ms / 1000).toFixed(3);
+            const formatMsToTime = (ms) => (!ms && ms !== 0) ? '-' : (ms / 1000).toFixed(3) + 's';
+
+            // Parse marker naming
+            function parseMarkerName(markerName) {
+                const yellowRegex = /AB(\d+)\s+(.+?)\s+Tag([\d.]+)\s*\(([XYZ])([+-])\)/i;
+                const yellowMatch = markerName.match(yellowRegex);
+
+                if (yellowMatch) {
+                    return {
+                        type: 'identifier',
+                        abNumber: 'AB' + yellowMatch[1],
+                        descriptor: yellowMatch[2],
+                        tagVersion: yellowMatch[3],
+                        axis: yellowMatch[4].toUpperCase(),
+                        direction: yellowMatch[5]
+                    };
+                }
+
+                const actionRegex = /Tag(\w+)(?:\.(\w+))?\s+#(\d+)/i;
+                const actionMatch = markerName.match(actionRegex);
+
+                if (actionMatch) {
+                    return {
+                        type: 'action',
+                        tagAction: actionMatch[1],
+                        subAction: actionMatch[2] || '',
+                        testRun: actionMatch[3]
+                    };
+                }
+
+                const errorRegex = /Error-(start|end)\s+#(\d+)/i;
+                const errorMatch = markerName.match(errorRegex);
+
+                if (errorMatch) {
+                    return {
+                        type: 'error',
+                        errorType: errorMatch[1],
+                        errorNumber: errorMatch[2]
+                    };
+                }
+
+                return null;
+            }
+
+            // Parse CSV with FPS auto-detection
+            const parseDavinciCSV = (csvText, filename) => {
+                console.log('Parsing CSV: ' + filename);
+                const lines = csvText.split('\n').filter(line => line.trim());
+                if (lines.length < 2) return null;
+
+                const parseCSVLine = (line) => {
+                    const result = [];
+                    let current = '';
+                    let inQuotes = false;
+
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            result.push(current.trim());
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    result.push(current.trim());
+                    return result;
+                };
+
+                const dataRows = [];
+                let detectedFPS = 30;
+
+                for (let i = 1; i < lines.length; i++) {
+                    const row = parseCSVLine(lines[i]);
+                    if (row.length > 20) {
+                        const rowFPS = parseFloat(row[17]);
+                        if (rowFPS > 0 && rowFPS !== detectedFPS) {
+                            detectedFPS = rowFPS;
+                        }
+                        dataRows.push({
+                            recordIn: row[9] || '',
+                            color: row[19] || '',
+                            notes: row[20] || ''
+                        });
+                    }
+                }
+
+                console.log('Detected FPS: ' + detectedFPS);
+
+                const timestamps = [];
+                const pendingMarkers = {};
+                const errorGroups = {};
+                let currentMetadata = {};
+                const axesFound = new Set();
+                const rangesDetected = {};
+
+                dataRows.forEach((row, index) => {
+                    const color = row.color.toLowerCase();
+                    const notes = row.notes;
+                    const timeMs = parseTimecode(row.recordIn, detectedFPS);
+                    const timeStr = msToSecondsFormat(timeMs);
+
+                    if (color === 'blue') return;
+
+                    const currentAxis = currentMetadata?.axis || '';
+                    const currentDirection = currentMetadata?.direction || '';
+
+                    // Red markers - Error grouping by number
+                    if (color === 'red') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'error') {
+                            const errorNum = parsed.errorNumber;
+
+                            if (!errorGroups[errorNum]) {
+                                errorGroups[errorNum] = { start: null, end: null };
+                            }
+
+                            if (parsed.errorType === 'start') {
+                                errorGroups[errorNum].start = {
+                                    time: timeStr,
+                                    recordIn: row.recordIn,
+                                    timeMs: timeMs
+                                };
+                            } else {
+                                errorGroups[errorNum].end = {
+                                    time: timeStr,
+                                    recordIn: row.recordIn,
+                                    timeMs: timeMs
+                                };
+                            }
+
+                            if (errorGroups[errorNum].start && errorGroups[errorNum].end) {
+                                const start = errorGroups[errorNum].start;
+                                const end = errorGroups[errorNum].end;
+                                const duration = end.timeMs - start.timeMs;
+
+                                timestamps.push({
+                                    id: Date.now().toString() + Math.random(),
+                                    time: start.time,
+                                    recordIn: start.recordIn,
+                                    label: 'Error',
+                                    note: 'Error #' + errorNum + ' (Duration: ' + msToSecondsFormat(duration) + 's)',
+                                    userNotes: '',
+                                    stage: '',
+                                    axis: currentAxis,
+                                    direction: currentDirection,
+                                    latencyMs: null,
+                                    excludeFromStats: true,
+                                    isError: true,
+                                    errorNumber: errorNum,
+                                    errorDuration: duration
+                                });
+                            }
+                        }
+                        return;
+                    }
+
+                    // Yellow markers
+                    if (color === 'yellow') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'identifier') {
+                            currentMetadata = parsed;
+                            const axisKey = parsed.axis + parsed.direction;
+                            axesFound.add(axisKey);
+
+                            const rangeMatch = notes.match(/(\d+)\s*mm/i);
+                            rangesDetected[axisKey] = rangeMatch ? parseInt(rangeMatch[1]) : null;
+                        }
+                    }
+                    // Green markers (TagOn trigger)
+                    else if (color === 'green') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = 'tagOn-' + parsed.testRun;
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata
+                            };
+                        }
+                    }
+                    // Pink markers (TagOn activation)
+                    else if (color === 'pink') {
+                        const tagOnKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOn-'));
+                        if (tagOnKeys.length > 0) {
+                            const lastKey = tagOnKeys[tagOnKeys.length - 1];
+                            const tagOnMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+
+                            const latency = timeMs - tagOnMarker.timeMs;
+
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOnMarker.time,
+                                recordIn: tagOnMarker.recordIn,
+                                label: 'TagOn',
+                                note: tagOnMarker.notes + ' → ' + notes,
+                                userNotes: '',
+                                stage: 'Tag' + (tagOnMarker.metadata?.tagVersion || '1.0') + ' Run#' + tagOnMarker.testRun,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOnMarker.metadata?.axis || '',
+                                direction: tagOnMarker.metadata?.direction || '',
+                                abNumber: tagOnMarker.metadata?.abNumber || '',
+                                tagVersion: tagOnMarker.metadata?.tagVersion || '',
+                                testRun: tagOnMarker.testRun,
+                                excludeFromStats: false,
+                                calculationExplained: tagOnMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency),
+                                isError: false
+                            });
+                        }
+                    }
+                    // Cyan markers (TagOff trigger)
+                    else if (color === 'cyan') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = 'tagOff-' + parsed.testRun;
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata
+                            };
+                        }
+                    }
+                    // Lemon/lime markers (TagOff activation)
+                    else if (color === 'lemon' || color === 'lime') {
+                        const tagOffKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOff-'));
+                        if (tagOffKeys.length > 0) {
+                            const lastKey = tagOffKeys[tagOffKeys.length - 1];
+                            const tagOffMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+
+                            const latency = timeMs - tagOffMarker.timeMs;
+
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOffMarker.time,
+                                recordIn: tagOffMarker.recordIn,
+                                label: 'TagOff',
+                                note: tagOffMarker.notes + ' → ' + notes,
+                                userNotes: '',
+                                stage: 'Tag' + (tagOffMarker.metadata?.tagVersion || '1.0') + ' Run#' + tagOffMarker.testRun,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOffMarker.metadata?.axis || '',
+                                direction: tagOffMarker.metadata?.direction || '',
+                                abNumber: tagOffMarker.metadata?.abNumber || '',
+                                tagVersion: tagOffMarker.metadata?.tagVersion || '',
+                                testRun: tagOffMarker.testRun,
+                                excludeFromStats: false,
+                                calculationExplained: tagOffMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency),
+                                isError: false
+                            });
+                        }
+                    }
+                });
+
+                Object.values(pendingMarkers).forEach(marker => {
+                    timestamps.push({
+                        id: Date.now().toString() + Math.random(),
+                        time: marker.time,
+                        recordIn: marker.recordIn,
+                        label: 'Error',
+                        note: marker.notes + ' (UNMATCHED)',
+                        userNotes: '',
+                        stage: '',
+                        axis: marker.metadata?.axis || '',
+                        direction: marker.metadata?.direction || '',
+                        latencyMs: null,
+                        excludeFromStats: true,
+                        isError: true
+                    });
+                });
+
+                console.log('Parsed ' + timestamps.length + ' timestamps');
+                console.log('Axes found: ' + Array.from(axesFound).join(', '));
+
+                return {
+                    timestamps,
+                    metadata: currentMetadata,
+                    axesFound: Array.from(axesFound),
+                    rangesDetected,
+                    filename,
+                    fps: detectedFPS
+                };
+            };
+
+            // Statistics
+            function getStatistics(timestamps, requirements = null) {
+                const validTimestamps = timestamps.filter(ts =>
+                    ts.latencyMs != null && !ts.excludeFromStats && !ts.isError
+                );
+
+                if (validTimestamps.length === 0) {
+                    return { min: 0, max: 0, avg: 0, total: 0, passed: 0, failed: 0, passRate: 0 };
+                }
+
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+                let passed = 0;
+                let failed = 0;
+
+                if (requirements && requirements.enabled) {
+                    validTimestamps.forEach(ts => {
+                        if (ts.latencyMs <= requirements.maxLatency) {
+                            passed++;
+                        } else {
+                            failed++;
+                        }
+                    });
+                }
+
+                const passRate = validTimestamps.length > 0 ? (passed / validTimestamps.length) * 100 : 0;
+
+                return { min, max, avg, total: validTimestamps.length, passed, failed, passRate };
+            }
+
+            function getAxisStatistics(timestamps, axis, direction, requirements = null) {
+                const axisTimestamps = timestamps.filter(ts =>
+                    ts.axis === axis && ts.direction === direction && !ts.isError
+                );
+
+                const validTimestamps = axisTimestamps.filter(ts =>
+                    ts.latencyMs != null && !ts.excludeFromStats
+                );
+
+                if (validTimestamps.length === 0) {
+                    return { min: 0, max: 0, avg: 0, total: 0, passed: 0, failed: 0, passRate: 0 };
+                }
+
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+                let passed = 0;
+                let failed = 0;
+
+                if (requirements && requirements.enabled) {
+                    validTimestamps.forEach(ts => {
+                        if (ts.latencyMs <= requirements.maxLatency) {
+                            passed++;
+                        } else {
+                            failed++;
+                        }
+                    });
+                }
+
+                const passRate = validTimestamps.length > 0 ? (passed / validTimestamps.length) * 100 : 0;
+
+                return { min, max, avg, total: validTimestamps.length, passed, failed, passRate };
+            }
+
+            const groupByAxis = (timestamps) => {
+                const groups = {};
+                timestamps.forEach(ts => {
+                    if (ts.axis && ts.direction) {
+                        const key = ts.axis + ts.direction;
+                        if (!groups[key]) groups[key] = [];
+                        groups[key].push(ts);
+                    }
+                });
+                return groups;
+            };
+
+            // Create structures
+            const createNewTestCase = () => ({
+                id: Date.now().toString(),
+                name: 'Test Case ' + (testCases.length + 1),
+                metadata: {},
+                executions: []
+            });
+
+            const createNewExecution = (testCase) => ({
+                id: Date.now().toString() + '_exec',
+                name: 'Execution ' + (testCase.executions.length + 1),
+                timestamps: [],
+                distances: {},
+                requirements: {
+                    enabled: false,
+                    maxLatency: 100,
+                    minRespondRanges: { X: 5, Y: 5, Z: 5 },
+                    mustNotRespondRanges: { X: 25, Y: 25, Z: 25 }
+                },
+                notes: ''
+            });
+
+            // Import file
+            const handleFileImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target.result;
+
+                    if (file.name.toLowerCase().endsWith('.csv')) {
+                        try {
+                            const result = parseDavinciCSV(content, file.name);
+                            if (result && result.timestamps.length > 0) {
+                                let tc = currentTestCase;
+
+                                if (!tc) {
+                                    tc = createNewTestCase();
+                                    tc.name = file.name.replace('.csv', '');
+                                    tc.metadata = result.metadata || {};
+                                    setTestCases([...testCases, tc]);
+                                }
+
+                                const newExecution = createNewExecution(tc);
+                                newExecution.name = file.name;
+                                newExecution.timestamps = result.timestamps;
+                                newExecution.fps = result.fps;
+
+                                // Auto-populate distances from CSV
+                                Object.entries(result.rangesDetected).forEach(([axisKey, distance]) => {
+                                    if (distance !== null) {
+                                        newExecution.distances[axisKey] = distance;
+                                    }
+                                });
+
+                                tc.executions.push(newExecution);
+
+                                const updated = testCases.map(t => t.id === tc.id ? tc : t);
+                                if (!testCases.find(t => t.id === tc.id)) {
+                                    updated.push(tc);
+                                }
+
+                                setTestCases(updated);
+                                setActiveTestCase(tc.id);
+                                setActiveExecution(newExecution.id);
+
+                                alert('CSV imported successfully!\n' +
+                                    'FPS: ' + result.fps + '\n' +
+                                    'Timestamps: ' + result.timestamps.length + '\n' +
+                                    'Axes: ' + result.axesFound.join(', '));
+                            }
+                        } catch (err) {
+                            alert('Error importing CSV: ' + err.message);
+                            console.error(err);
+                        }
+                    } else if (file.name.toLowerCase().endsWith('.json')) {
+                        try {
+                            const data = JSON.parse(content);
+                            if (data.testCases) {
+                                setTestCases(data.testCases);
+                                alert('Data imported successfully!');
+                            }
+                        } catch (err) {
+                            alert('Error importing JSON: ' + err.message);
+                        }
+                    }
+                };
+
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            // Export
+            const handleExportJSON = () => {
+                const data = {
+                    testCases,
+                    exportDate: new Date().toISOString()
+                };
+
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'latency-test-data-' + new Date().toISOString().split('T')[0] + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            // Toggle marker inclusion
+            const toggleMarkerInclusion = (timestampId) => {
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.map(ts => {
+                                            if (ts.id === timestampId) {
+                                                return { ...ts, excludeFromStats: !ts.excludeFromStats };
+                                            }
+                                            return ts;
+                                        })
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Delete timestamp
+            const handleDeleteTimestamp = (timestampId) => {
+                if (!confirm('Delete this entry?')) return;
+
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.filter(ts => ts.id !== timestampId)
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Update test case name
+            const updateTestCaseName = (testCaseId, newName) => {
+                const updated = testCases.map(tc =>
+                    tc.id === testCaseId ? { ...tc, name: newName } : tc
+                );
+                setTestCases(updated);
+            };
+
+            // Delete test case
+            const deleteTestCase = (testCaseId) => {
+                if (!confirm('Delete this test case?')) return;
+
+                const updated = testCases.filter(tc => tc.id !== testCaseId);
+                setTestCases(updated);
+
+                if (activeTestCase === testCaseId) {
+                    setActiveTestCase(updated.length > 0 ? updated[0].id : null);
+                    setActiveExecution(updated.length > 0 && updated[0].executions.length > 0 ? updated[0].executions[0].id : null);
+                }
+            };
+
+            // Delete execution
+            const deleteExecution = (testCaseId, executionId) => {
+                if (!confirm('Delete this execution?')) return;
+
+                const updated = testCases.map(tc => {
+                    if (tc.id === testCaseId) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.filter(ex => ex.id !== executionId)
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+
+                if (activeExecution === executionId) {
+                    const tc = updated.find(t => t.id === testCaseId);
+                    setActiveExecution(tc && tc.executions.length > 0 ? tc.executions[0].id : null);
+                }
+            };
+
+            // Update execution requirements
+            const updateExecutionRequirements = (field, value) => {
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        requirements: {
+                                            ...ex.requirements,
+                                            [field]: value
+                                        }
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Update distance
+            const updateDistance = (axisKey, distance) => {
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        distances: {
+                                            ...ex.distances,
+                                            [axisKey]: parseFloat(distance) || null
+                                        }
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Add to comparison
+            const addToComparison = (testCaseId, executionId) => {
+                const key = testCaseId + '_' + executionId;
+                if (!comparisonExecutions.find(c => c.key === key)) {
+                    const tc = testCases.find(t => t.id === testCaseId);
+                    const ex = tc?.executions.find(e => e.id === executionId);
+
+                    if (tc && ex) {
+                        setComparisonExecutions([...comparisonExecutions, {
+                            key,
+                            testCaseName: tc.name,
+                            executionName: ex.name,
+                            testCaseId,
+                            executionId,
+                            execution: ex
+                        }]);
+                    }
+                }
+            };
+
+            // Remove from comparison
+            const removeFromComparison = (key) => {
+                setComparisonExecutions(comparisonExecutions.filter(c => c.key !== key));
+            };
+
+            // Get current objects
+            const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
+            const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
+
+            // Render execution view
+            const renderExecutionView = () => {
+                if (!currentTestCase || !currentExecution) {
+                    return (
+                        <div className="flex items-center justify-center h-full p-12">
+                            <div className="text-center">
+                                <p className="text-gray-500 text-lg mb-4">No test case or execution loaded</p>
+                                <button
+                                    onClick={() => {
+                                        const newTC = createNewTestCase();
+                                        const newEx = createNewExecution(newTC);
+                                        newTC.executions.push(newEx);
+                                        setTestCases([...testCases, newTC]);
+                                        setActiveTestCase(newTC.id);
+                                        setActiveExecution(newEx.id);
+                                    }}
+                                    className="px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                >
+                                    <Icon name="plus" /> Create New Test Case
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+
+                const timestamps = currentExecution.timestamps;
+                const requirements = currentExecution.requirements;
+                const overallStats = getStatistics(timestamps, requirements);
+                const axisGroups = groupByAxis(timestamps);
+
+                // Error grouping
+                const errorEvents = timestamps.filter(ts => ts.isError);
+                const errorsByNumber = {};
+                errorEvents.forEach(err => {
+                    if (err.errorNumber) {
+                        if (!errorsByNumber[err.errorNumber]) {
+                            errorsByNumber[err.errorNumber] = [];
+                        }
+                        errorsByNumber[err.errorNumber].push(err);
+                    }
+                });
+
+                return (
+                    <div className="p-6">
+                        {/* Test Specifications */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-3">Test Specifications</h3>
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span className="text-gray-600">Test Case:</span>
+                                    <span className="ml-2 font-medium">{currentTestCase.name}</span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-600">Execution:</span>
+                                    <span className="ml-2 font-medium">{currentExecution.name}</span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-600">AB Number:</span>
+                                    <span className="ml-2 font-medium">{currentTestCase.metadata?.abNumber || 'N/A'}</span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-600">Tag Version:</span>
+                                    <span className="ml-2 font-medium">{currentTestCase.metadata?.tagVersion || 'N/A'}</span>
+                                </div>
+                            </div>
+
+                            {/* Tested Distances */}
+                            {currentExecution.distances && Object.keys(currentExecution.distances).length > 0 && (
+                                <div className="mt-3">
+                                    <div className="text-sm text-gray-600 mb-1">Tested Distances from Face:</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {Object.entries(currentExecution.distances).map(([axis, dist]) => (
+                                            dist !== null && (
+                                                <span key={axis} className="px-3 py-1 bg-blue-100 rounded text-sm">
+                                                    {axis}: {dist}mm
+                                                </span>
+                                            )
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Pass/Fail Criteria */}
+                            <div className="mt-3 border-t pt-3">
+                                <div className="text-sm font-medium mb-2">
+                                    Pass/Fail Criteria:
+                                    <span className={`ml-2 ${requirements.enabled ? 'text-green-600' : 'text-gray-400'}`}>
+                                        {requirements.enabled ? '✓ Enabled' : '✗ Disabled'}
+                                    </span>
+                                </div>
+                                {requirements.enabled && (
+                                    <div className="text-xs text-gray-600">
+                                        Max Latency: {requirements.maxLatency}ms |
+                                        Min Respond: X:{requirements.minRespondRanges.X}mm Y:{requirements.minRespondRanges.Y}mm Z:{requirements.minRespondRanges.Z}mm |
+                                        Must NOT: X:{requirements.mustNotRespondRanges.X}mm Y:{requirements.mustNotRespondRanges.Y}mm Z:{requirements.mustNotRespondRanges.Z}mm
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Manual Distance Input */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-2">Set Test Distances (mm)</h3>
+                            <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                                {['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'].map(axisKey => (
+                                    <div key={axisKey}>
+                                        <label className="block text-sm mb-1">{axisKey}</label>
+                                        <input
+                                            type="number"
+                                            value={currentExecution.distances?.[axisKey] || ''}
+                                            onChange={(e) => updateDistance(axisKey, e.target.value)}
+                                            placeholder="mm"
+                                            className="w-full px-2 py-1 border rounded text-sm"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Requirements Settings */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-3">Pass/Fail Requirements</h3>
+                            <div className="flex items-center mb-3">
+                                <input
+                                    type="checkbox"
+                                    checked={requirements.enabled}
+                                    onChange={(e) => updateExecutionRequirements('enabled', e.target.checked)}
+                                    className="w-4 h-4 mr-2"
+                                />
+                                <label className="text-sm font-medium">Enable Requirements Checking</label>
+                            </div>
+
+                            {requirements.enabled && (
+                                <>
+                                    <div className="mb-3">
+                                        <label className="block text-sm mb-1">Max Latency (ms)</label>
+                                        <input
+                                            type="number"
+                                            value={requirements.maxLatency}
+                                            onChange={(e) => updateExecutionRequirements('maxLatency', parseFloat(e.target.value) || 100)}
+                                            className="w-32 px-2 py-1 border rounded text-sm"
+                                        />
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        {['X', 'Y', 'Z'].map(axis => (
+                                            <div key={axis} className="border rounded p-3">
+                                                <div className="font-medium mb-2">{axis} Axis</div>
+                                                <div className="space-y-2">
+                                                    <div>
+                                                        <label className="block text-xs mb-1">Min Must Respond (mm)</label>
+                                                        <input
+                                                            type="number"
+                                                            value={requirements.minRespondRanges[axis]}
+                                                            onChange={(e) => updateExecutionRequirements('minRespondRanges', {
+                                                                ...requirements.minRespondRanges,
+                                                                [axis]: parseFloat(e.target.value) || 0
+                                                            })}
+                                                            className="w-full px-2 py-1 border rounded text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs mb-1">Must NOT Respond (mm)</label>
+                                                        <input
+                                                            type="number"
+                                                            value={requirements.mustNotRespondRanges[axis]}
+                                                            onChange={(e) => updateExecutionRequirements('mustNotRespondRanges', {
+                                                                ...requirements.mustNotRespondRanges,
+                                                                [axis]: parseFloat(e.target.value) || 0
+                                                            })}
+                                                            className="w-full px-2 py-1 border rounded text-sm"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Overall Statistics */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-2">Overall Statistics</h3>
+                            <div className="grid grid-cols-4 gap-4 text-center">
+                                <div>
+                                    <div className="text-lg font-bold text-green-600">{formatMsToTime(overallStats.min)}</div>
+                                    <div className="text-sm text-gray-600">Min</div>
+                                </div>
+                                <div>
+                                    <div className="text-lg font-bold text-blue-600">{formatMsToTime(overallStats.avg)}</div>
+                                    <div className="text-sm text-gray-600">Avg</div>
+                                </div>
+                                <div>
+                                    <div className="text-lg font-bold text-red-600">{formatMsToTime(overallStats.max)}</div>
+                                    <div className="text-sm text-gray-600">Max</div>
+                                </div>
+                                <div>
+                                    <div className="text-lg font-bold text-gray-600">{overallStats.total}</div>
+                                    <div className="text-sm text-gray-600">Count</div>
+                                </div>
+                            </div>
+                            {requirements.enabled && (
+                                <div className="mt-3 text-center border-t pt-3">
+                                    <div className="text-sm">
+                                        Pass: <span className="text-green-600 font-bold">{overallStats.passed}</span> /
+                                        Fail: <span className="text-red-600 font-bold">{overallStats.failed}</span>
+                                        <span className="ml-2">({overallStats.passRate.toFixed(1)}%)</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Error Events Grouped */}
+                        {Object.keys(errorsByNumber).length > 0 && (
+                            <div className="bg-yellow-50 rounded-lg shadow p-4 mb-4">
+                                <h3 className="font-semibold mb-2">Error Events (Grouped)</h3>
+                                <div className="space-y-2">
+                                    {Object.entries(errorsByNumber).map(([errorNum, errors]) => (
+                                        <div key={errorNum} className="bg-white rounded p-2 border border-yellow-200">
+                                            <div className="font-medium text-sm">Error #{errorNum}</div>
+                                            {errors.map(err => (
+                                                <div key={err.id} className="text-xs text-gray-600 ml-2">
+                                                    {err.note}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Per-Axis Tables or Combined */}
+                        {axisGroupingEnabled ? (
+                            // Separate tables per axis
+                            <div className="space-y-4">
+                                {Object.entries(axisGroups).map(([axisKey, axisTimestamps]) => {
+                                    const axis = axisKey[0];
+                                    const direction = axisKey[1];
+                                    const axisStats = getAxisStatistics(axisTimestamps, axis, direction, requirements);
+                                    const distance = currentExecution.distances?.[axisKey];
+
+                                    return (
+                                        <div key={axisKey} className="bg-white rounded-lg shadow overflow-hidden">
+                                            <div className="p-4 bg-gray-50 border-b">
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <h3 className="font-semibold">
+                                                            {axisKey}
+                                                            {distance && <span className="text-sm text-gray-600 ml-2">({distance}mm)</span>}
+                                                        </h3>
+                                                    </div>
+                                                    <div className="text-sm text-gray-600">
+                                                        Min: {formatMsToTime(axisStats.min)} |
+                                                        Avg: {formatMsToTime(axisStats.avg)} |
+                                                        Max: {formatMsToTime(axisStats.max)}
+                                                        {requirements.enabled && (
+                                                            <span className="ml-2">
+                                                                | Pass: {axisStats.passRate.toFixed(1)}% ({axisStats.passed}/{axisStats.total})
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-gray-50">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left">Include</th>
+                                                            <th className="px-4 py-2 text-left">Time (s)</th>
+                                                            <th className="px-4 py-2 text-left">Timecode</th>
+                                                            <th className="px-4 py-2 text-left">Label</th>
+                                                            <th className="px-4 py-2 text-left">Note</th>
+                                                            <th className="px-4 py-2 text-right">Latency</th>
+                                                            <th className="px-4 py-2 text-center">Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {axisTimestamps.map(ts => {
+                                                            const rowClass = ts.isError ? 'row-error' :
+                                                                ts.excludeFromStats ? 'row-excluded' :
+                                                                showPassFailHighlight && requirements.enabled && ts.latencyMs ?
+                                                                    (ts.latencyMs <= requirements.maxLatency ? 'row-pass' : 'row-fail') : '';
+
+                                                            return (
+                                                                <tr key={ts.id} className={rowClass + ' border-t hover:bg-gray-50'}>
+                                                                    <td className="px-4 py-2">
+                                                                        {!ts.isError && (
+                                                                            <input
+                                                                                type="checkbox"
+                                                                                checked={!ts.excludeFromStats}
+                                                                                onChange={() => toggleMarkerInclusion(ts.id)}
+                                                                                className="w-4 h-4"
+                                                                            />
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="px-4 py-2 font-mono">{ts.time}</td>
+                                                                    <td className="px-4 py-2 font-mono text-xs">{ts.recordIn}</td>
+                                                                    <td className="px-4 py-2">
+                                                                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                                            ts.label === 'TagOn' ? 'bg-green-100 text-green-800' :
+                                                                            ts.label === 'TagOff' ? 'bg-blue-100 text-blue-800' :
+                                                                            'bg-red-100 text-red-800'
+                                                                        }`}>
+                                                                            {ts.label}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="px-4 py-2 text-xs max-w-xs truncate" title={ts.note}>{ts.note}</td>
+                                                                    <td className="px-4 py-2 text-right font-mono font-bold">{ts.latency || '-'}</td>
+                                                                    <td className="px-4 py-2 text-center">
+                                                                        <button
+                                                                            onClick={() => handleDeleteTimestamp(ts.id)}
+                                                                            className="text-red-600 hover:text-red-800"
+                                                                        >
+                                                                            <Icon name="trash-2" />
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            // Combined table
+                            <div className="bg-white rounded-lg shadow overflow-hidden">
+                                <div className="p-4 border-b">
+                                    <h3 className="font-semibold">All Timestamps</h3>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-4 py-2 text-left">Include</th>
+                                                <th className="px-4 py-2 text-left">Time (s)</th>
+                                                <th className="px-4 py-2 text-left">Timecode</th>
+                                                <th className="px-4 py-2 text-left">Label</th>
+                                                <th className="px-4 py-2 text-left">Axis</th>
+                                                <th className="px-4 py-2 text-left">Note</th>
+                                                <th className="px-4 py-2 text-right">Latency</th>
+                                                <th className="px-4 py-2 text-center">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {timestamps.map(ts => {
+                                                const rowClass = ts.isError ? 'row-error' :
+                                                    ts.excludeFromStats ? 'row-excluded' :
+                                                    showPassFailHighlight && requirements.enabled && ts.latencyMs ?
+                                                        (ts.latencyMs <= requirements.maxLatency ? 'row-pass' : 'row-fail') : '';
+
+                                                return (
+                                                    <tr key={ts.id} className={rowClass + ' border-t hover:bg-gray-50'}>
+                                                        <td className="px-4 py-2">
+                                                            {!ts.isError && (
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={!ts.excludeFromStats}
+                                                                    onChange={() => toggleMarkerInclusion(ts.id)}
+                                                                    className="w-4 h-4"
+                                                                />
+                                                            )}
+                                                        </td>
+                                                        <td className="px-4 py-2 font-mono">{ts.time}</td>
+                                                        <td className="px-4 py-2 font-mono text-xs">{ts.recordIn}</td>
+                                                        <td className="px-4 py-2">
+                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                                ts.label === 'TagOn' ? 'bg-green-100 text-green-800' :
+                                                                ts.label === 'TagOff' ? 'bg-blue-100 text-blue-800' :
+                                                                'bg-red-100 text-red-800'
+                                                            }`}>
+                                                                {ts.label}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-4 py-2 font-medium">{ts.axis && ts.direction ? ts.axis + ts.direction : '-'}</td>
+                                                        <td className="px-4 py-2 text-xs max-w-xs truncate" title={ts.note}>{ts.note}</td>
+                                                        <td className="px-4 py-2 text-right font-mono font-bold">{ts.latency || '-'}</td>
+                                                        <td className="px-4 py-2 text-center">
+                                                            <button
+                                                                onClick={() => handleDeleteTimestamp(ts.id)}
+                                                                className="text-red-600 hover:text-red-800"
+                                                            >
+                                                                <Icon name="trash-2" />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            // Render comparison view
+            const renderComparisonView = () => {
+                if (comparisonExecutions.length === 0) {
+                    return (
+                        <div className="flex items-center justify-center h-full p-12">
+                            <div className="text-center text-gray-500">
+                                <Icon name="git-compare" />
+                                <p className="mt-4">No executions added to comparison</p>
+                                <p className="text-sm mt-2">Use "Add to Comparison" in execution view</p>
+                            </div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="p-6">
+                        <h2 className="text-2xl font-bold mb-4">Comparison View</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {comparisonExecutions.map(comp => {
+                                const ex = comp.execution;
+                                const stats = getStatistics(ex.timestamps, ex.requirements);
+
+                                return (
+                                    <div key={comp.key} className="bg-white rounded-lg shadow p-4">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div>
+                                                <h3 className="font-semibold">{comp.testCaseName}</h3>
+                                                <p className="text-sm text-gray-600">{comp.executionName}</p>
+                                            </div>
+                                            <button
+                                                onClick={() => removeFromComparison(comp.key)}
+                                                className="text-red-600 hover:text-red-800"
+                                            >
+                                                <Icon name="x" />
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-2 text-sm">
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-600">Min:</span>
+                                                <span className="font-mono font-bold text-green-600">{formatMsToTime(stats.min)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-600">Avg:</span>
+                                                <span className="font-mono font-bold text-blue-600">{formatMsToTime(stats.avg)}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-600">Max:</span>
+                                                <span className="font-mono font-bold text-red-600">{formatMsToTime(stats.max)}</span>
+                                            </div>
+                                            <div className="flex justify-between border-t pt-2">
+                                                <span className="text-gray-600">Count:</span>
+                                                <span className="font-bold">{stats.total}</span>
+                                            </div>
+                                            {ex.requirements.enabled && (
+                                                <div className="flex justify-between border-t pt-2">
+                                                    <span className="text-gray-600">Pass Rate:</span>
+                                                    <span className="font-bold">{stats.passRate.toFixed(1)}%</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            };
+
+            // Render report view
+            const renderReportView = () => {
+                return (
+                    <div className="p-6">
+                        <div className="no-print mb-6 flex justify-between items-center">
+                            <h2 className="text-2xl font-bold">Test Report</h2>
+                            <button
+                                onClick={() => window.print()}
+                                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                            >
+                                <Icon name="download" /> Print/Export PDF
+                            </button>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <div className="text-center mb-8">
+                                <h1 className="text-3xl font-bold mb-2">Hardware Latency Test Report</h1>
+                                <p className="text-gray-600">Generated: {new Date().toLocaleString()}</p>
+                            </div>
+
+                            {testCases.map(tc => (
+                                <div key={tc.id} className="mb-12 page-break-after">
+                                    <h2 className="text-2xl font-bold mb-4 border-b pb-2">{tc.name}</h2>
+
+                                    {tc.executions.map(ex => {
+                                        const stats = getStatistics(ex.timestamps, ex.requirements);
+                                        const axisGroups = groupByAxis(ex.timestamps);
+
+                                        return (
+                                            <div key={ex.id} className="mb-8">
+                                                <h3 className="text-xl font-semibold mb-3">{ex.name}</h3>
+
+                                                <div className="mb-4">
+                                                    <div className="grid grid-cols-4 gap-4 text-center mb-4">
+                                                        <div className="border rounded p-3">
+                                                            <div className="text-xl font-bold text-green-600">{formatMsToTime(stats.min)}</div>
+                                                            <div className="text-sm text-gray-600">Minimum</div>
+                                                        </div>
+                                                        <div className="border rounded p-3">
+                                                            <div className="text-xl font-bold text-blue-600">{formatMsToTime(stats.avg)}</div>
+                                                            <div className="text-sm text-gray-600">Average</div>
+                                                        </div>
+                                                        <div className="border rounded p-3">
+                                                            <div className="text-xl font-bold text-red-600">{formatMsToTime(stats.max)}</div>
+                                                            <div className="text-sm text-gray-600">Maximum</div>
+                                                        </div>
+                                                        <div className="border rounded p-3">
+                                                            <div className="text-xl font-bold text-gray-600">{stats.total}</div>
+                                                            <div className="text-sm text-gray-600">Count</div>
+                                                        </div>
+                                                    </div>
+
+                                                    {ex.requirements.enabled && (
+                                                        <div className="text-center border-t pt-3">
+                                                            <div className="text-sm">
+                                                                Pass: <span className="text-green-600 font-bold">{stats.passed}</span> /
+                                                                Fail: <span className="text-red-600 font-bold">{stats.failed}</span>
+                                                                <span className="ml-2">({stats.passRate.toFixed(1)}% pass rate)</span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <table className="w-full text-sm mb-4">
+                                                    <thead className="bg-gray-50">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left">Axis</th>
+                                                            <th className="px-4 py-2 text-right">Min</th>
+                                                            <th className="px-4 py-2 text-right">Avg</th>
+                                                            <th className="px-4 py-2 text-right">Max</th>
+                                                            <th className="px-4 py-2 text-right">Count</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {Object.keys(axisGroups).map(axisKey => {
+                                                            const axis = axisKey[0];
+                                                            const direction = axisKey[1];
+                                                            const axisStats = getAxisStatistics(axisGroups[axisKey], axis, direction, ex.requirements);
+
+                                                            return (
+                                                                <tr key={axisKey} className="border-t">
+                                                                    <td className="px-4 py-2 font-medium">{axisKey}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(axisStats.min)}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(axisStats.avg)}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(axisStats.max)}</td>
+                                                                    <td className="px-4 py-2 text-right">{axisStats.total}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            };
+
+            // Main render
+            return (
+                <div className="min-h-screen bg-gray-100">
+                    {/* Header */}
+                    <div className="bg-blue-600 text-white shadow-lg no-print">
+                        <div className="px-6 py-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h1 className="text-2xl font-bold">Hardware Latency Tester</h1>
+                                    <p className="text-blue-100 text-sm">v3.8 - Professional Edition</p>
+                                </div>
+                                <div className="flex space-x-2">
+                                    <button
+                                        onClick={() => importRef.current?.click()}
+                                        className="px-4 py-2 bg-blue-700 rounded hover:bg-blue-800"
+                                    >
+                                        <Icon name="upload" /> Import
+                                    </button>
+                                    <button
+                                        onClick={handleExportJSON}
+                                        className="px-4 py-2 bg-blue-700 rounded hover:bg-blue-800"
+                                        disabled={testCases.length === 0}
+                                    >
+                                        <Icon name="download" /> Export
+                                    </button>
+                                    {currentTestCase && currentExecution && (
+                                        <button
+                                            onClick={() => addToComparison(activeTestCase, activeExecution)}
+                                            className="px-4 py-2 bg-blue-700 rounded hover:bg-blue-800"
+                                        >
+                                            <Icon name="git-compare" /> Add to Comparison
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="px-6 flex space-x-1 border-t border-blue-500">
+                            <button
+                                onClick={() => setView('execution')}
+                                className={`px-4 py-2 ${view === 'execution' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="bar-chart" /> Execution
+                            </button>
+                            <button
+                                onClick={() => setView('comparison')}
+                                className={`px-4 py-2 ${view === 'comparison' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="git-compare" /> Comparison ({comparisonExecutions.length})
+                            </button>
+                            <button
+                                onClick={() => setView('report')}
+                                className={`px-4 py-2 ${view === 'report' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="file-text" /> Report
+                            </button>
+                            <div className="ml-auto flex items-center space-x-2 px-4">
+                                <label className="text-sm flex items-center cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={axisGroupingEnabled}
+                                        onChange={(e) => setAxisGroupingEnabled(e.target.checked)}
+                                        className="mr-2"
+                                    />
+                                    Group by Axis
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="flex">
+                        {/* Sidebar */}
+                        {view === 'execution' && (
+                            <div className="w-64 bg-white shadow-lg no-print" style={{ minHeight: 'calc(100vh - 140px)' }}>
+                                <div className="p-4">
+                                    <div className="mb-4">
+                                        <h3 className="font-semibold mb-2">Test Cases</h3>
+                                        <button
+                                            onClick={() => {
+                                                const newTC = createNewTestCase();
+                                                const newEx = createNewExecution(newTC);
+                                                newTC.executions.push(newEx);
+                                                setTestCases([...testCases, newTC]);
+                                                setActiveTestCase(newTC.id);
+                                                setActiveExecution(newEx.id);
+                                            }}
+                                            className="w-full px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 mb-2 text-sm"
+                                        >
+                                            <Icon name="plus" /> New Test Case
+                                        </button>
+                                        <div className="space-y-1">
+                                            {testCases.map(tc => (
+                                                <div key={tc.id}>
+                                                    <div
+                                                        onClick={() => {
+                                                            setActiveTestCase(tc.id);
+                                                            if (tc.executions.length > 0) {
+                                                                setActiveExecution(tc.executions[0].id);
+                                                            }
+                                                        }}
+                                                        className={`px-3 py-2 rounded cursor-pointer text-sm truncate ${
+                                                            activeTestCase === tc.id ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-100'
+                                                        }`}
+                                                        title={tc.name}
+                                                    >
+                                                        {tc.name}
+                                                    </div>
+                                                    {activeTestCase === tc.id && (
+                                                        <div className="ml-4 mt-1 space-y-1">
+                                                            {tc.executions.map(ex => (
+                                                                <div
+                                                                    key={ex.id}
+                                                                    onClick={() => setActiveExecution(ex.id)}
+                                                                    className={`px-2 py-1 rounded cursor-pointer text-xs truncate ${
+                                                                        activeExecution === ex.id ? 'bg-green-100 font-medium' : 'hover:bg-gray-50'
+                                                                    }`}
+                                                                    title={ex.name}
+                                                                >
+                                                                    {ex.name}
+                                                                </div>
+                                                            ))}
+                                                            <button
+                                                                onClick={() => {
+                                                                    const newEx = createNewExecution(tc);
+                                                                    tc.executions.push(newEx);
+                                                                    setTestCases([...testCases]);
+                                                                    setActiveExecution(newEx.id);
+                                                                }}
+                                                                className="w-full px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs"
+                                                            >
+                                                                + New Execution
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Main View */}
+                        <div className="flex-1">
+                            {view === 'execution' && renderExecutionView()}
+                            {view === 'comparison' && renderComparisonView()}
+                            {view === 'report' && renderReportView()}
+                        </div>
+                    </div>
+
+                    <input
+                        ref={importRef}
+                        type="file"
+                        accept=".csv,.json"
+                        onChange={handleFileImport}
+                        className="hidden"
+                    />
+                </div>
+            );
+        };
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<LatencyTester />);
+    </script>
+</body>
+</html>
