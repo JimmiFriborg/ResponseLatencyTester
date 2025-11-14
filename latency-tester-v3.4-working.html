@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Latency Tester v3.4</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.5.0/dist/Recharts.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .row-pass { background-color: rgba(34, 197, 94, 0.1); }
+        .row-fail { background-color: rgba(239, 68, 68, 0.1); }
+        .row-error { background-color: rgba(251, 191, 36, 0.1); }
+        @media print {
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } = Recharts;
+        
+        const App = () => {
+            // State management
+            const [testCases, setTestCases] = useState([]);
+            const [activeTestCase, setActiveTestCase] = useState(null);
+            const [activeExecution, setActiveExecution] = useState(null);
+            const [comparisonSets, setComparisonSets] = useState([]);
+            const [view, setView] = useState('execution');
+            const [autoSave, setAutoSave] = useState(false);
+            const [lastSaved, setLastSaved] = useState(null);
+            const [dataLoaded, setDataLoaded] = useState(false);
+            const [storageAvailable, setStorageAvailable] = useState(true);
+            const importRef = useRef(null);
+            
+            // Enhanced states
+            const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+            const [showPassFailHighlight, setShowPassFailHighlight] = useState(false);
+            const [testMetadata, setTestMetadata] = useState({});
+            const [axisRanges, setAxisRanges] = useState({});
+            
+            // Storage keys
+            const STORAGE_KEYS = {
+                testCases: 'latencyTester_testCases',
+                activeTestCase: 'latencyTester_activeTestCase',
+                activeExecution: 'latencyTester_activeExecution',
+                comparisonSets: 'latencyTester_comparisonSets',
+                view: 'latencyTester_view',
+                autoSave: 'latencyTester_autoSave',
+                sortConfig: 'latencyTester_sortConfig',
+                showPassFailHighlight: 'latencyTester_showPassFailHighlight'
+            };
+            
+            // Icon component
+            const Icon = ({ name }) => {
+                const icons = {
+                    'plus': '+',
+                    'trash-2': '🗑',
+                    'download': '⬇',
+                    'upload': '⬆',
+                    'cloud': '☁',
+                    'hard-drive': '💾',
+                    'activity': '📊',
+                    'bar-chart-2': '📈',
+                    'file-text': '📄',
+                    'film': '🎬',
+                    'x': '✕'
+                };
+                return <span>{icons[name] || '•'}</span>;
+            };
+            
+            // Utility functions
+            const parseTimecode = (timecode, fps = 30) => {
+                // Parse format: "01:00:23:09" (HH:MM:SS:FF)
+                const parts = timecode.split(':');
+                if (parts.length !== 4) return 0;
+                
+                const hours = parseInt(parts[0]) || 0;
+                const minutes = parseInt(parts[1]) || 0;
+                const seconds = parseInt(parts[2]) || 0;
+                const frames = parseInt(parts[3]) || 0;
+                
+                const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+                const frameTime = frames / fps;
+                
+                return (totalSeconds + frameTime) * 1000; // Return milliseconds
+            };
+            
+            const msToSecondsFormat = (ms) => {
+                return (ms / 1000).toFixed(3);
+            };
+            
+            const parseTimeToMs = (timeStr) => {
+                if (!timeStr) return null;
+                const time = parseFloat(timeStr);
+                return isNaN(time) ? null : time * 1000;
+            };
+            
+            const formatMsToTime = (ms) => {
+                if (!ms && ms !== 0) return '-';
+                const seconds = ms / 1000;
+                return seconds.toFixed(3) + 's';
+            };
+            
+            // Parse marker naming schemes
+            function parseMarkerName(markerName) {
+                // Yellow marker format: "AB6 Single Tag1.1 (X+)"
+                const yellowRegex = /AB(\d+)\s+(.+?)\s+Tag([\d.]+)\s*\(([XYZ])([+-])\)/i;
+                const yellowMatch = markerName.match(yellowRegex);
+                
+                if (yellowMatch) {
+                    return {
+                        type: 'identifier',
+                        abNumber: `AB${yellowMatch[1]}`,
+                        descriptor: yellowMatch[2],
+                        tagVersion: yellowMatch[3],
+                        axis: yellowMatch[4].toUpperCase(),
+                        direction: yellowMatch[5]
+                    };
+                }
+                
+                // Action marker format: "TagOn #1", "TagOn.Activation #1"
+                const actionRegex = /Tag(\w+)(?:\.(\w+))?\s+#(\d+)/i;
+                const actionMatch = markerName.match(actionRegex);
+                
+                if (actionMatch) {
+                    return {
+                        type: 'action',
+                        tagAction: actionMatch[1],
+                        subAction: actionMatch[2] || '',
+                        testRun: actionMatch[3]
+                    };
+                }
+                
+                return null;
+            }
+            
+            // Enhanced DaVinci CSV parser
+            const parseDavinciCSV = (csvText) => {
+                console.log('Starting CSV parse...');
+                const lines = csvText.split('\n').filter(line => line.trim());
+                if (lines.length < 2) return null;
+                
+                const parseCSVLine = (line) => {
+                    const result = [];
+                    let current = '';
+                    let inQuotes = false;
+                    
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            result.push(current.trim());
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    result.push(current.trim());
+                    return result;
+                };
+                
+                const dataRows = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const row = parseCSVLine(lines[i]);
+                    if (row.length > 20) {
+                        dataRows.push({
+                            recordIn: row[9] || '',
+                            color: row[19] || '',
+                            notes: row[20] || '',
+                            fps: parseFloat(row[17]) || 30
+                        });
+                    }
+                }
+                
+                console.log(`Parsed ${dataRows.length} data rows`);
+                
+                const timestamps = [];
+                const tagGroups = {};
+                const pendingMarkers = {};
+                let currentMetadata = {};
+                let inErrorZone = false;
+                let axesFound = new Set();
+                let rangesDetected = {};
+                
+                dataRows.forEach((row, index) => {
+                    const color = row.color.toLowerCase();
+                    const notes = row.notes;
+                    const timeMs = parseTimecode(row.recordIn, row.fps);
+                    const timeStr = msToSecondsFormat(timeMs);
+                    
+                    // Skip blue markers
+                    if (color === 'blue') return;
+                    
+                    // Red markers indicate error zones
+                    if (color === 'red') {
+                        inErrorZone = !inErrorZone;
+                        timestamps.push({
+                            id: Date.now().toString() + Math.random(),
+                            time: timeStr,
+                            recordIn: row.recordIn,
+                            label: 'Error',
+                            note: `Error Zone ${inErrorZone ? 'Start' : 'End'}: ${notes}`,
+                            stage: '',
+                            pairedTime: '',
+                            latency: '',
+                            latencyMs: null,
+                            axis: '',
+                            direction: '',
+                            isUnmatched: false,
+                            excludeFromStats: true
+                        });
+                        return;
+                    }
+                    
+                    if (color === 'yellow') {
+                        // Yellow: Identifier markers
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'identifier') {
+                            currentMetadata = parsed;
+                            const axisKey = parsed.axis + parsed.direction;
+                            axesFound.add(axisKey);
+                            
+                            // Extract range if present (e.g., "10mm" in notes)
+                            const rangeMatch = notes.match(/(\d+)\s*mm/i);
+                            if (rangeMatch) {
+                                rangesDetected[axisKey] = parseInt(rangeMatch[1]);
+                            }
+                            
+                            console.log(`Yellow marker: ${notes}, Axis: ${axisKey}`);
+                        }
+                    } else if (color === 'green') {
+                        // Green: TagOn Action Marker
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = `tagOn-${parsed.testRun}`;
+                            
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                tagAction: parsed.tagAction,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata,
+                                excludeFromStats: inErrorZone
+                            };
+                        }
+                    } else if (color === 'pink') {
+                        // Pink: TagOn Activation Marker - pairs with most recent green
+                        const tagOnKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOn-'));
+                        if (tagOnKeys.length > 0) {
+                            const lastKey = tagOnKeys[tagOnKeys.length - 1];
+                            const tagOnMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+                            
+                            const latency = timeMs - tagOnMarker.timeMs;
+                            
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOnMarker.time,
+                                recordIn: tagOnMarker.recordIn,
+                                label: 'TagOn',
+                                note: `${tagOnMarker.notes} → ${notes}`,
+                                stage: `Tag${tagOnMarker.metadata?.tagVersion || '1.0'} Run#${tagOnMarker.testRun}`,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOnMarker.metadata?.axis || '',
+                                direction: tagOnMarker.metadata?.direction || '',
+                                abNumber: tagOnMarker.metadata?.abNumber || '',
+                                tagVersion: tagOnMarker.metadata?.tagVersion || '',
+                                testRun: tagOnMarker.testRun,
+                                isUnmatched: false,
+                                excludeFromStats: tagOnMarker.excludeFromStats,
+                                calculationExplained: `${tagOnMarker.recordIn} → ${row.recordIn} = ${msToSecondsFormat(latency)}`
+                            });
+                        }
+                    } else if (color === 'cyan') {
+                        // Cyan: TagOff Action Marker
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = `tagOff-${parsed.testRun}`;
+                            
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                tagAction: parsed.tagAction,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata,
+                                excludeFromStats: inErrorZone
+                            };
+                        }
+                    } else if (color === 'lemon' || color === 'lime') {
+                        // Lemon: TagOff Activation Marker
+                        const tagOffKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOff-'));
+                        if (tagOffKeys.length > 0) {
+                            const lastKey = tagOffKeys[tagOffKeys.length - 1];
+                            const tagOffMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+                            
+                            const latency = timeMs - tagOffMarker.timeMs;
+                            
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOffMarker.time,
+                                recordIn: tagOffMarker.recordIn,
+                                label: 'TagOff',
+                                note: `${tagOffMarker.notes} → ${notes}`,
+                                stage: `Tag${tagOffMarker.metadata?.tagVersion || '1.0'} Run#${tagOffMarker.testRun}`,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOffMarker.metadata?.axis || '',
+                                direction: tagOffMarker.metadata?.direction || '',
+                                abNumber: tagOffMarker.metadata?.abNumber || '',
+                                tagVersion: tagOffMarker.metadata?.tagVersion || '',
+                                testRun: tagOffMarker.testRun,
+                                isUnmatched: false,
+                                excludeFromStats: tagOffMarker.excludeFromStats,
+                                calculationExplained: `${tagOffMarker.recordIn} → ${row.recordIn} = ${msToSecondsFormat(latency)}`
+                            });
+                        }
+                    }
+                });
+                
+                // Mark unpaired markers as unmatched
+                Object.values(pendingMarkers).forEach(marker => {
+                    timestamps.push({
+                        id: Date.now().toString() + Math.random(),
+                        time: marker.time,
+                        recordIn: marker.recordIn,
+                        label: 'Error',
+                        note: `${marker.notes} (UNMATCHED - No activation)`,
+                        stage: `Tag${marker.metadata?.tagVersion || '1.0'} Run#${marker.testRun}`,
+                        pairedTime: '',
+                        latency: '',
+                        latencyMs: null,
+                        axis: marker.metadata?.axis || '',
+                        direction: marker.metadata?.direction || '',
+                        isUnmatched: true,
+                        excludeFromStats: true
+                    });
+                });
+                
+                // Sort timestamps by time
+                timestamps.sort((a, b) => {
+                    const aMs = parseTimeToMs(a.time);
+                    const bMs = parseTimeToMs(b.time);
+                    return aMs - bMs;
+                });
+                
+                console.log(`CSV Parse Complete:`);
+                console.log(`- Total timestamps: ${timestamps.length}`);
+                console.log(`- Axes found: ${Array.from(axesFound).join(', ')}`);
+                console.log(`- Ranges detected:`, rangesDetected);
+                
+                return {
+                    timestamps,
+                    tagGroups,
+                    metadata: currentMetadata,
+                    sourceFile: 'DaVinci Resolve Import',
+                    axesFound: Array.from(axesFound),
+                    rangesDetected: rangesDetected
+                };
+            };
+            
+            // Calculate statistics
+            function getStatistics(latencies) {
+                if (latencies.length === 0) return { min: 0, max: 0, avg: 0 };
+                
+                const values = latencies.map(l => l.value);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                
+                return { min, max, avg };
+            }
+            
+            // Calculate latencies
+            function calculateLatencies(timestamps) {
+                const latencies = [];
+                const validTimestamps = timestamps.filter(ts => !ts.excludeFromStats && !ts.isUnmatched);
+                
+                validTimestamps.forEach(ts => {
+                    if (ts.latencyMs) {
+                        latencies.push({
+                            value: ts.latencyMs,
+                            from: { 
+                                time: ts.time, 
+                                label: ts.label,
+                                note: ts.note.split(' → ')[0] || ts.note 
+                            },
+                            to: { 
+                                time: ts.pairedTime || ts.time,
+                                label: 'Experience',
+                                note: ts.note.split(' → ')[1] || 'Response'
+                            },
+                            isPaired: true,
+                            axis: ts.axis,
+                            direction: ts.direction
+                        });
+                    }
+                });
+                
+                return latencies;
+            }
+            
+            // Group by axis function
+            const groupTimestampsByAxis = (timestamps) => {
+                const groups = {};
+                timestamps.forEach(ts => {
+                    const key = ts.axis && ts.direction ? `${ts.axis}${ts.direction}` : 'No Axis';
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(ts);
+                });
+                return groups;
+            };
+            
+            // Calculate axis statistics
+            function getAxisStatistics(timestamps) {
+                const validTimestamps = timestamps.filter(ts => ts.latencyMs && !ts.excludeFromStats);
+                
+                if (validTimestamps.length === 0) {
+                    return { min: 0, max: 0, avg: 0, total: 0, passRate: 0 };
+                }
+                
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                
+                return { min, max, avg, total: validTimestamps.length, passRate: 100 };
+            }
+            
+            // Create new test case
+            const createNewTestCase = () => ({
+                id: Date.now().toString(),
+                name: `Test Case ${testCases.length + 1}`,
+                metadata: {},
+                executions: [{
+                    id: Date.now().toString() + '_exec',
+                    name: 'Execution 1',
+                    timestamps: [],
+                    passCriteria: { enabled: false, maxLatency: 100 },
+                    notes: ''
+                }]
+            });
+            
+            // File import handler
+            const handleFileImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target.result;
+                    
+                    if (file.name.toLowerCase().endsWith('.csv')) {
+                        try {
+                            const result = parseDavinciCSV(content);
+                            if (result && result.timestamps.length > 0) {
+                                const newTestCase = createNewTestCase();
+                                newTestCase.name = `Import - ${new Date().toLocaleString()}`;
+                                newTestCase.metadata = result.metadata || {};
+                                newTestCase.metadata.axesFound = result.axesFound || [];
+                                newTestCase.metadata.rangesDetected = result.rangesDetected || {};
+                                
+                                newTestCase.executions[0].name = file.name;
+                                newTestCase.executions[0].timestamps = result.timestamps;
+                                newTestCase.executions[0].rangesDetected = result.rangesDetected || {};
+                                
+                                setTestCases([...testCases, newTestCase]);
+                                setActiveTestCase(newTestCase.id);
+                                setActiveExecution(newTestCase.executions[0].id);
+                                
+                                const axesInfo = result.axesFound ? 
+                                    `Axes: ${result.axesFound.join(', ')}` : '';
+                                alert(`CSV imported!\nEvents: ${result.timestamps.length}\n${axesInfo}`);
+                            }
+                        } catch (error) {
+                            console.error('CSV Import error:', error);
+                            alert('Failed to parse CSV file.');
+                        }
+                    }
+                };
+                reader.readAsText(file);
+            };
+            
+            // Export to CSV
+            const exportToCSV = () => {
+                if (!currentExecution) {
+                    alert('No execution selected');
+                    return;
+                }
+                
+                let csv = 'Index,Time (s),Record In,Paired Time,Label,Axis,Stage,Note,Latency (ms)\n';
+                
+                currentExecution.timestamps.forEach((ts, idx) => {
+                    csv += `${idx + 1},`;
+                    csv += `${ts.time},`;
+                    csv += `${ts.recordIn || ''},`;
+                    csv += `${ts.pairedTime || ''},`;
+                    csv += `${ts.label},`;
+                    csv += `${ts.axis}${ts.direction || ''},`;
+                    csv += `${ts.stage || ''},`;
+                    csv += `"${(ts.note || '').replace(/"/g, '""')}",`;
+                    csv += `${ts.latencyMs || ''}\n`;
+                });
+                
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `export-${Date.now()}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+            
+            // Initialize
+            useEffect(() => {
+                const defaultTestCase = createNewTestCase();
+                setTestCases([defaultTestCase]);
+                setActiveTestCase(defaultTestCase.id);
+                setActiveExecution(defaultTestCase.executions[0].id);
+                setDataLoaded(true);
+            }, []);
+            
+            // Get current test case and execution
+            const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
+            const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
+            
+            // Main render
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <div className="bg-white border-b px-6 py-4">
+                        <div className="flex justify-between items-center">
+                            <h1 className="text-2xl font-bold">Hardware Latency Tester v3.4</h1>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => importRef.current?.click()}
+                                    className="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200"
+                                >
+                                    Import CSV
+                                </button>
+                                <button
+                                    onClick={exportToCSV}
+                                    className="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200"
+                                >
+                                    Export CSV
+                                </button>
+                                <input
+                                    ref={importRef}
+                                    type="file"
+                                    accept=".csv"
+                                    onChange={handleFileImport}
+                                    className="hidden"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="p-6">
+                        {currentExecution ? (
+                            <div className="space-y-4">
+                                {/* Test Info */}
+                                <div className="bg-white rounded-lg p-4 shadow">
+                                    <h2 className="text-lg font-semibold mb-2">Test Information</h2>
+                                    <div className="grid grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <span className="font-medium">Test Case:</span> {currentTestCase?.name}
+                                        </div>
+                                        <div>
+                                            <span className="font-medium">File:</span> {currentExecution.name}
+                                        </div>
+                                        {currentTestCase?.metadata?.abNumber && (
+                                            <div>
+                                                <span className="font-medium">AB Number:</span> {currentTestCase.metadata.abNumber}
+                                            </div>
+                                        )}
+                                        {currentTestCase?.metadata?.tagVersion && (
+                                            <div>
+                                                <span className="font-medium">Tag Version:</span> Tag{currentTestCase.metadata.tagVersion}
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Axis Ranges */}
+                                    {currentExecution.rangesDetected && Object.keys(currentExecution.rangesDetected).length > 0 && (
+                                        <div className="mt-3 pt-3 border-t">
+                                            <div className="font-medium mb-2">Tested Distances from Face:</div>
+                                            <div className="flex gap-2 flex-wrap">
+                                                {Object.entries(currentExecution.rangesDetected).map(([axis, distance]) => (
+                                                    <span key={axis} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                                                        {axis}: {distance}mm
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* Statistics */}
+                                <div className="bg-white rounded-lg p-4 shadow">
+                                    <h2 className="text-lg font-semibold mb-2">Statistics</h2>
+                                    {(() => {
+                                        const latencies = calculateLatencies(currentExecution.timestamps);
+                                        const stats = getStatistics(latencies);
+                                        const axisGroups = groupTimestampsByAxis(currentExecution.timestamps);
+                                        
+                                        return (
+                                            <div>
+                                                <div className="grid grid-cols-3 gap-4 mb-4">
+                                                    <div className="text-center p-2 bg-gray-50 rounded">
+                                                        <div className="text-xl font-bold text-blue-600">
+                                                            {formatMsToTime(stats.min)}
+                                                        </div>
+                                                        <div className="text-xs">Minimum</div>
+                                                    </div>
+                                                    <div className="text-center p-2 bg-gray-50 rounded">
+                                                        <div className="text-xl font-bold text-green-600">
+                                                            {formatMsToTime(stats.avg)}
+                                                        </div>
+                                                        <div className="text-xs">Average</div>
+                                                    </div>
+                                                    <div className="text-center p-2 bg-gray-50 rounded">
+                                                        <div className="text-xl font-bold text-orange-600">
+                                                            {formatMsToTime(stats.max)}
+                                                        </div>
+                                                        <div className="text-xs">Maximum</div>
+                                                    </div>
+                                                </div>
+                                                
+                                                {/* Per-axis breakdown */}
+                                                <div className="space-y-1">
+                                                    {Object.entries(axisGroups)
+                                                        .filter(([key]) => key !== 'No Axis')
+                                                        .map(([axis, timestamps]) => {
+                                                            const axisStats = getAxisStatistics(timestamps);
+                                                            const distance = currentExecution.rangesDetected?.[axis];
+                                                            
+                                                            return (
+                                                                <div key={axis} className="flex justify-between text-sm bg-gray-50 p-2 rounded">
+                                                                    <span className="font-medium">
+                                                                        {axis} {distance ? `(${distance}mm)` : ''}:
+                                                                    </span>
+                                                                    <span>
+                                                                        Min: {formatMsToTime(axisStats.min)} | 
+                                                                        Avg: {formatMsToTime(axisStats.avg)} | 
+                                                                        Max: {formatMsToTime(axisStats.max)}
+                                                                    </span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+                                
+                                {/* Timestamps Table */}
+                                <div className="bg-white rounded-lg p-4 shadow">
+                                    <h2 className="text-lg font-semibold mb-2">Timestamps</h2>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead>
+                                                <tr className="border-b">
+                                                    <th className="text-left p-2">#</th>
+                                                    <th className="text-left p-2">Time (s)</th>
+                                                    <th className="text-left p-2">Record In</th>
+                                                    <th className="text-left p-2">Label</th>
+                                                    <th className="text-left p-2">Axis</th>
+                                                    <th className="text-left p-2">Note</th>
+                                                    <th className="text-left p-2">Latency</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {currentExecution.timestamps.map((ts, idx) => (
+                                                    <tr key={ts.id} className={`border-b hover:bg-gray-50 ${
+                                                        ts.excludeFromStats ? 'row-error' : 
+                                                        ts.label === 'Error' ? 'row-error' :
+                                                        showPassFailHighlight && ts.latencyMs ? 
+                                                            (ts.latencyMs <= 100 ? 'row-pass' : 'row-fail') : ''
+                                                    }`}>
+                                                        <td className="p-2">{idx + 1}</td>
+                                                        <td className="p-2">{ts.time}</td>
+                                                        <td className="p-2 text-xs text-gray-600">
+                                                            {ts.recordIn || ''}
+                                                            {ts.pairedRecordIn && (
+                                                                <div>→ {ts.pairedRecordIn}</div>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-2">
+                                                            <span className={`px-2 py-1 rounded text-xs ${
+                                                                ts.label === 'Error' ? 'bg-red-100 text-red-700' :
+                                                                ts.label === 'TagOn' ? 'bg-green-100 text-green-700' :
+                                                                'bg-blue-100 text-blue-700'
+                                                            }`}>
+                                                                {ts.label}
+                                                            </span>
+                                                        </td>
+                                                        <td className="p-2">
+                                                            {ts.axis}{ts.direction}
+                                                            {currentExecution.rangesDetected?.[ts.axis + ts.direction] && (
+                                                                <span className="text-xs text-gray-500 ml-1">
+                                                                    ({currentExecution.rangesDetected[ts.axis + ts.direction]}mm)
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-2 text-xs">
+                                                            {ts.note}
+                                                            {ts.calculationExplained && (
+                                                                <div className="text-gray-500 italic">
+                                                                    {ts.calculationExplained}
+                                                                </div>
+                                                            )}
+                                                        </td>
+                                                        <td className="p-2 font-medium">
+                                                            {ts.excludeFromStats && (
+                                                                <span className="text-xs text-gray-400">(excluded) </span>
+                                                            )}
+                                                            {ts.latency || '-'}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    <div className="mt-4 flex items-center gap-2">
+                                        <label className="flex items-center gap-1">
+                                            <input
+                                                type="checkbox"
+                                                checked={showPassFailHighlight}
+                                                onChange={(e) => setShowPassFailHighlight(e.target.checked)}
+                                            />
+                                            <span className="text-sm">Highlight Pass/Fail (100ms threshold)</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-center py-8 text-gray-500">
+                                Import a CSV file to begin
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+        
+        // Mount the app
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

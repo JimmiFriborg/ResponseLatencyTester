@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Latency Tester v3.6</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        .row-pass { background-color: rgba(34, 197, 94, 0.1); }
+        .row-fail { background-color: rgba(239, 68, 68, 0.1); }
+        .row-error { background-color: rgba(251, 191, 36, 0.1); }
+        @media print {
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        const LatencyTester = () => {
+            // State management
+            const [testCases, setTestCases] = useState([]);
+            const [activeTestCase, setActiveTestCase] = useState(null);
+            const [activeExecution, setActiveExecution] = useState(null);
+            const [comparisonSets, setComparisonSets] = useState([]);
+            const [view, setView] = useState('execution');
+            const [autoSave, setAutoSave] = useState(false);
+            const [lastSaved, setLastSaved] = useState(null);
+            const [dataLoaded, setDataLoaded] = useState(false);
+            const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
+            const importRef = useRef(null);
+            
+            // Simple Icon component
+            const Icon = ({ name }) => {
+                const icons = {
+                    'plus': '+',
+                    'trash-2': '🗑',
+                    'download': '⬇',
+                    'upload': '⬆',
+                    'cloud': '☁',
+                    'hard-drive': '💾',
+                    'activity': '📊',
+                    'bar-chart-2': '📈',
+                    'file-text': '📄',
+                    'x': '✕'
+                };
+                return <span>{icons[name] || '•'}</span>;
+            };
+            
+            // Parse timecode utility
+            const parseTimecode = (timecode, fps = 30) => {
+                const parts = timecode.split(':');
+                if (parts.length !== 4) return 0;
+                
+                const hours = parseInt(parts[0]) || 0;
+                const minutes = parseInt(parts[1]) || 0;
+                const seconds = parseInt(parts[2]) || 0;
+                const frames = parseInt(parts[3]) || 0;
+                
+                const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+                const frameTime = frames / fps;
+                
+                return (totalSeconds + frameTime) * 1000;
+            };
+            
+            const msToSecondsFormat = (ms) => {
+                return (ms / 1000).toFixed(3);
+            };
+            
+            const formatMsToTime = (ms) => {
+                if (!ms && ms !== 0) return '-';
+                return (ms / 1000).toFixed(3) + 's';
+            };
+            
+            const parseTimeToMs = (timeStr) => {
+                if (!timeStr) return null;
+                const time = parseFloat(timeStr);
+                return isNaN(time) ? null : time * 1000;
+            };
+            
+            // Parse marker naming
+            function parseMarkerName(markerName) {
+                // Yellow: "AB6 Single Tag1.1 (X+)"
+                const yellowRegex = /AB(\d+)\s+(.+?)\s+Tag([\d.]+)\s*\(([XYZ])([+-])\)/i;
+                const yellowMatch = markerName.match(yellowRegex);
+                
+                if (yellowMatch) {
+                    return {
+                        type: 'identifier',
+                        abNumber: 'AB' + yellowMatch[1],
+                        descriptor: yellowMatch[2],
+                        tagVersion: yellowMatch[3],
+                        axis: yellowMatch[4].toUpperCase(),
+                        direction: yellowMatch[5]
+                    };
+                }
+                
+                // Action: "TagOn #1"
+                const actionRegex = /Tag(\w+)(?:\.(\w+))?\s+#(\d+)/i;
+                const actionMatch = markerName.match(actionRegex);
+                
+                if (actionMatch) {
+                    return {
+                        type: 'action',
+                        tagAction: actionMatch[1],
+                        subAction: actionMatch[2] || '',
+                        testRun: actionMatch[3]
+                    };
+                }
+                
+                return null;
+            }
+            
+            // Parse DaVinci CSV
+            const parseDavinciCSV = (csvText) => {
+                console.log('Starting CSV parse...');
+                const lines = csvText.split('\n').filter(line => line.trim());
+                if (lines.length < 2) return null;
+                
+                const parseCSVLine = (line) => {
+                    const result = [];
+                    let current = '';
+                    let inQuotes = false;
+                    
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            result.push(current.trim());
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    result.push(current.trim());
+                    return result;
+                };
+                
+                const dataRows = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const row = parseCSVLine(lines[i]);
+                    if (row.length > 20) {
+                        dataRows.push({
+                            recordIn: row[9] || '',
+                            color: row[19] || '',
+                            notes: row[20] || '',
+                            fps: parseFloat(row[17]) || 30
+                        });
+                    }
+                }
+                
+                const timestamps = [];
+                const pendingMarkers = {};
+                let currentMetadata = {};
+                let inErrorZone = false;
+                const axesFound = new Set();
+                const rangesDetected = {};
+                
+                dataRows.forEach((row, index) => {
+                    const color = row.color.toLowerCase();
+                    const notes = row.notes;
+                    const timeMs = parseTimecode(row.recordIn, row.fps);
+                    const timeStr = msToSecondsFormat(timeMs);
+                    
+                    if (color === 'blue') return;
+                    
+                    if (color === 'red') {
+                        inErrorZone = !inErrorZone;
+                        timestamps.push({
+                            id: Date.now().toString() + Math.random(),
+                            time: timeStr,
+                            recordIn: row.recordIn,
+                            label: 'Error',
+                            note: 'Error Zone ' + (inErrorZone ? 'Start' : 'End') + ': ' + notes,
+                            stage: '',
+                            axis: '',
+                            direction: '',
+                            latencyMs: null,
+                            excludeFromStats: true
+                        });
+                        return;
+                    }
+                    
+                    if (color === 'yellow') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'identifier') {
+                            currentMetadata = parsed;
+                            const axisKey = parsed.axis + parsed.direction;
+                            axesFound.add(axisKey);
+                            
+                            // Default 10mm if not specified
+                            rangesDetected[axisKey] = 10;
+                            
+                            console.log('Yellow: ' + notes + ', Axis: ' + axisKey);
+                        }
+                    } else if (color === 'green') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = 'tagOn-' + parsed.testRun;
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata,
+                                excludeFromStats: inErrorZone
+                            };
+                        }
+                    } else if (color === 'pink') {
+                        const tagOnKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOn-'));
+                        if (tagOnKeys.length > 0) {
+                            const lastKey = tagOnKeys[tagOnKeys.length - 1];
+                            const tagOnMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+                            
+                            const latency = timeMs - tagOnMarker.timeMs;
+                            
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOnMarker.time,
+                                recordIn: tagOnMarker.recordIn,
+                                label: 'TagOn',
+                                note: tagOnMarker.notes + ' → ' + notes,
+                                stage: 'Tag' + (tagOnMarker.metadata?.tagVersion || '1.0') + ' Run#' + tagOnMarker.testRun,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOnMarker.metadata?.axis || '',
+                                direction: tagOnMarker.metadata?.direction || '',
+                                abNumber: tagOnMarker.metadata?.abNumber || '',
+                                tagVersion: tagOnMarker.metadata?.tagVersion || '',
+                                testRun: tagOnMarker.testRun,
+                                excludeFromStats: tagOnMarker.excludeFromStats,
+                                calculationExplained: tagOnMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency)
+                            });
+                        }
+                    } else if (color === 'cyan') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = 'tagOff-' + parsed.testRun;
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata,
+                                excludeFromStats: inErrorZone
+                            };
+                        }
+                    } else if (color === 'lemon' || color === 'lime') {
+                        const tagOffKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOff-'));
+                        if (tagOffKeys.length > 0) {
+                            const lastKey = tagOffKeys[tagOffKeys.length - 1];
+                            const tagOffMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+                            
+                            const latency = timeMs - tagOffMarker.timeMs;
+                            
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOffMarker.time,
+                                recordIn: tagOffMarker.recordIn,
+                                label: 'TagOff',
+                                note: tagOffMarker.notes + ' → ' + notes,
+                                stage: 'Tag' + (tagOffMarker.metadata?.tagVersion || '1.0') + ' Run#' + tagOffMarker.testRun,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOffMarker.metadata?.axis || '',
+                                direction: tagOffMarker.metadata?.direction || '',
+                                abNumber: tagOffMarker.metadata?.abNumber || '',
+                                tagVersion: tagOffMarker.metadata?.tagVersion || '',
+                                testRun: tagOffMarker.testRun,
+                                excludeFromStats: tagOffMarker.excludeFromStats,
+                                calculationExplained: tagOffMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency)
+                            });
+                        }
+                    }
+                });
+                
+                // Mark unpaired as unmatched
+                Object.values(pendingMarkers).forEach(marker => {
+                    timestamps.push({
+                        id: Date.now().toString() + Math.random(),
+                        time: marker.time,
+                        recordIn: marker.recordIn,
+                        label: 'Error',
+                        note: marker.notes + ' (UNMATCHED)',
+                        stage: '',
+                        axis: marker.metadata?.axis || '',
+                        direction: marker.metadata?.direction || '',
+                        latencyMs: null,
+                        excludeFromStats: true
+                    });
+                });
+                
+                console.log('Parse complete: ' + timestamps.length + ' events');
+                console.log('Axes: ' + Array.from(axesFound).join(', '));
+                
+                return {
+                    timestamps,
+                    metadata: currentMetadata,
+                    axesFound: Array.from(axesFound),
+                    rangesDetected
+                };
+            };
+            
+            // Calculate statistics
+            function getStatistics(timestamps) {
+                const validTimestamps = timestamps.filter(ts => ts.latencyMs && !ts.excludeFromStats);
+                if (validTimestamps.length === 0) return { min: 0, max: 0, avg: 0 };
+                
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                
+                return { min, max, avg };
+            }
+            
+            // Get axis statistics with pass/fail
+            function getAxisStatistics(timestamps, passCriteria) {
+                const validTimestamps = timestamps.filter(ts => ts.latencyMs && !ts.excludeFromStats);
+                
+                if (validTimestamps.length === 0) {
+                    return { min: 0, max: 0, avg: 0, total: 0, passed: 0, failed: 0, passRate: 0 };
+                }
+                
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                
+                let passed = 0;
+                let failed = 0;
+                
+                if (passCriteria && passCriteria.enabled) {
+                    validTimestamps.forEach(ts => {
+                        if (ts.latencyMs <= passCriteria.maxLatency) {
+                            passed++;
+                        } else {
+                            failed++;
+                        }
+                    });
+                }
+                
+                const passRate = validTimestamps.length > 0 ? (passed / validTimestamps.length) * 100 : 0;
+                
+                return { min, max, avg, total: validTimestamps.length, passed, failed, passRate };
+            }
+            
+            // Group by axis
+            const groupByAxis = (timestamps) => {
+                const groups = {};
+                timestamps.forEach(ts => {
+                    const key = ts.axis && ts.direction ? ts.axis + ts.direction : 'No Axis';
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(ts);
+                });
+                return groups;
+            };
+            
+            // Create new test case
+            const createNewTestCase = () => ({
+                id: Date.now().toString(),
+                name: 'Test Case ' + (testCases.length + 1),
+                metadata: {},
+                executions: [{
+                    id: Date.now().toString() + '_exec',
+                    name: 'Execution 1',
+                    timestamps: [],
+                    passCriteria: {
+                        enabled: false,
+                        maxLatency: 100,
+                        rangeX: 10,
+                        rangeY: 10,
+                        rangeZ: 10
+                    },
+                    rangesDetected: {},
+                    notes: ''
+                }]
+            });
+            
+            // Create new execution
+            const createNewExecution = () => ({
+                id: Date.now().toString() + '_exec',
+                name: 'Execution ' + (currentTestCase ? currentTestCase.executions.length + 1 : 1),
+                timestamps: [],
+                passCriteria: {
+                    enabled: false,
+                    maxLatency: 100,
+                    rangeX: 10,
+                    rangeY: 10,
+                    rangeZ: 10
+                },
+                rangesDetected: {},
+                notes: ''
+            });
+            
+            // File import
+            const handleFileImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target.result;
+                    
+                    if (file.name.toLowerCase().endsWith('.csv')) {
+                        try {
+                            const result = parseDavinciCSV(content);
+                            if (result && result.timestamps.length > 0) {
+                                const newTestCase = createNewTestCase();
+                                newTestCase.name = 'Import - ' + new Date().toLocaleString();
+                                newTestCase.metadata = result.metadata || {};
+                                
+                                newTestCase.executions[0].name = file.name;
+                                newTestCase.executions[0].timestamps = result.timestamps;
+                                newTestCase.executions[0].rangesDetected = result.rangesDetected || {};
+                                
+                                setTestCases([...testCases, newTestCase]);
+                                setActiveTestCase(newTestCase.id);
+                                setActiveExecution(newTestCase.executions[0].id);
+                                
+                                alert('CSV imported!\nEvents: ' + result.timestamps.length + '\nAxes: ' + (result.axesFound || []).join(', '));
+                            }
+                        } catch (error) {
+                            console.error('Import error:', error);
+                            alert('Failed to parse CSV');
+                        }
+                    }
+                };
+                reader.readAsText(file);
+            };
+            
+            // Export to CSV
+            const exportToCSV = () => {
+                if (!currentExecution) return;
+                
+                let csv = 'Index,Time (s),Record In,Label,Axis,Stage,Note,Latency (ms),Pass/Fail\n';
+                
+                currentExecution.timestamps.forEach((ts, idx) => {
+                    const passFail = ts.latencyMs && currentExecution.passCriteria.enabled ?
+                        (ts.latencyMs <= currentExecution.passCriteria.maxLatency ? 'Pass' : 'Fail') : '';
+                    
+                    csv += (idx + 1) + ',';
+                    csv += ts.time + ',';
+                    csv += (ts.recordIn || '') + ',';
+                    csv += ts.label + ',';
+                    csv += ts.axis + ts.direction + ',';
+                    csv += (ts.stage || '') + ',';
+                    csv += '"' + (ts.note || '').replace(/"/g, '""') + '",';
+                    csv += (ts.latencyMs || '') + ',';
+                    csv += passFail + '\n';
+                });
+                
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'latency-export.csv';
+                a.click();
+            };
+            
+            // Add to comparison
+            const handleAddToComparison = (execution) => {
+                const newComp = {
+                    id: Date.now().toString(),
+                    executionId: execution.id,
+                    name: execution.name,
+                    data: execution.timestamps
+                };
+                setComparisonSets([...comparisonSets, newComp]);
+                alert('Added to comparison');
+            };
+            
+            // Initialize
+            useEffect(() => {
+                const defaultTestCase = createNewTestCase();
+                setTestCases([defaultTestCase]);
+                setActiveTestCase(defaultTestCase.id);
+                setActiveExecution(defaultTestCase.executions[0].id);
+                setDataLoaded(true);
+            }, []);
+            
+            // Get current data
+            const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
+            const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
+            
+            // Render execution view
+            const renderExecutionView = () => {
+                if (!currentExecution) return <div className="text-center py-8">No execution selected</div>;
+                
+                const stats = getStatistics(currentExecution.timestamps);
+                const groups = groupByAxis(currentExecution.timestamps);
+                const excludedCount = currentExecution.timestamps.filter(ts => ts.excludeFromStats).length;
+                const passed = currentExecution.passCriteria.enabled && 
+                    currentExecution.timestamps.filter(ts => ts.latencyMs && !ts.excludeFromStats && 
+                        ts.latencyMs <= currentExecution.passCriteria.maxLatency).length;
+                const failed = currentExecution.passCriteria.enabled && 
+                    currentExecution.timestamps.filter(ts => ts.latencyMs && !ts.excludeFromStats && 
+                        ts.latencyMs > currentExecution.passCriteria.maxLatency).length;
+                
+                return (
+                    <div className="space-y-4">
+                        {/* Test Specifications */}
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <h3 className="text-lg font-semibold mb-3">Test Specifications</h3>
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span className="font-medium">Test Case:</span> {currentTestCase?.name}
+                                </div>
+                                <div>
+                                    <span className="font-medium">Execution:</span> {currentExecution.name}
+                                </div>
+                                {currentTestCase?.metadata?.abNumber && (
+                                    <div>
+                                        <span className="font-medium">AB Number:</span> {currentTestCase.metadata.abNumber}
+                                    </div>
+                                )}
+                                {currentTestCase?.metadata?.tagVersion && (
+                                    <div>
+                                        <span className="font-medium">Tag Version:</span> Tag{currentTestCase.metadata.tagVersion}
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {/* Tested distances */}
+                            {Object.keys(currentExecution.rangesDetected || {}).length > 0 && (
+                                <div className="mt-3 pt-3 border-t">
+                                    <div className="font-medium mb-2">Tested Distances from Face:</div>
+                                    <div className="flex gap-2 flex-wrap">
+                                        {Object.entries(currentExecution.rangesDetected).map(([axis, distance]) => (
+                                            <span key={axis} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                                                {axis}: {distance}mm
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Pass criteria */}
+                            <div className="mt-3 pt-3 border-t">
+                                <div className="flex items-center justify-between">
+                                    <div className="font-medium">Pass/Fail Criteria</div>
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={currentExecution.passCriteria.enabled}
+                                            onChange={(e) => {
+                                                const updated = testCases.map(tc => {
+                                                    if (tc.id === activeTestCase) {
+                                                        return {
+                                                            ...tc,
+                                                            executions: tc.executions.map(ex => {
+                                                                if (ex.id === activeExecution) {
+                                                                    return {
+                                                                        ...ex,
+                                                                        passCriteria: {
+                                                                            ...ex.passCriteria,
+                                                                            enabled: e.target.checked
+                                                                        }
+                                                                    };
+                                                                }
+                                                                return ex;
+                                                            })
+                                                        };
+                                                    }
+                                                    return tc;
+                                                });
+                                                setTestCases(updated);
+                                            }}
+                                        />
+                                        <span className="text-sm">Enabled</span>
+                                    </label>
+                                </div>
+                                {currentExecution.passCriteria.enabled && (
+                                    <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                                        <div>
+                                            <label className="block text-xs font-medium mb-1">Max Latency (ms)</label>
+                                            <input
+                                                type="number"
+                                                value={currentExecution.passCriteria.maxLatency}
+                                                onChange={(e) => {
+                                                    const updated = testCases.map(tc => {
+                                                        if (tc.id === activeTestCase) {
+                                                            return {
+                                                                ...tc,
+                                                                executions: tc.executions.map(ex => {
+                                                                    if (ex.id === activeExecution) {
+                                                                        return {
+                                                                            ...ex,
+                                                                            passCriteria: {
+                                                                                ...ex.passCriteria,
+                                                                                maxLatency: parseInt(e.target.value) || 100
+                                                                            }
+                                                                        };
+                                                                    }
+                                                                    return ex;
+                                                                })
+                                                            };
+                                                        }
+                                                        return tc;
+                                                    });
+                                                    setTestCases(updated);
+                                                }}
+                                                className="w-full px-2 py-1 border rounded"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium mb-1">Range Requirements (mm)</label>
+                                            <div className="flex gap-1">
+                                                <input
+                                                    type="number"
+                                                    placeholder="X"
+                                                    value={currentExecution.passCriteria.rangeX}
+                                                    onChange={(e) => {
+                                                        const updated = testCases.map(tc => {
+                                                            if (tc.id === activeTestCase) {
+                                                                return {
+                                                                    ...tc,
+                                                                    executions: tc.executions.map(ex => {
+                                                                        if (ex.id === activeExecution) {
+                                                                            return {
+                                                                                ...ex,
+                                                                                passCriteria: {
+                                                                                    ...ex.passCriteria,
+                                                                                    rangeX: parseInt(e.target.value) || 10
+                                                                                }
+                                                                            };
+                                                                        }
+                                                                        return ex;
+                                                                    })
+                                                                };
+                                                            }
+                                                            return tc;
+                                                        });
+                                                        setTestCases(updated);
+                                                    }}
+                                                    className="w-full px-1 py-1 border rounded"
+                                                />
+                                                <input
+                                                    type="number"
+                                                    placeholder="Y"
+                                                    value={currentExecution.passCriteria.rangeY}
+                                                    onChange={(e) => {
+                                                        const updated = testCases.map(tc => {
+                                                            if (tc.id === activeTestCase) {
+                                                                return {
+                                                                    ...tc,
+                                                                    executions: tc.executions.map(ex => {
+                                                                        if (ex.id === activeExecution) {
+                                                                            return {
+                                                                                ...ex,
+                                                                                passCriteria: {
+                                                                                    ...ex.passCriteria,
+                                                                                    rangeY: parseInt(e.target.value) || 10
+                                                                                }
+                                                                            };
+                                                                        }
+                                                                        return ex;
+                                                                    })
+                                                                };
+                                                            }
+                                                            return tc;
+                                                        });
+                                                        setTestCases(updated);
+                                                    }}
+                                                    className="w-full px-1 py-1 border rounded"
+                                                />
+                                                <input
+                                                    type="number"
+                                                    placeholder="Z"
+                                                    value={currentExecution.passCriteria.rangeZ}
+                                                    onChange={(e) => {
+                                                        const updated = testCases.map(tc => {
+                                                            if (tc.id === activeTestCase) {
+                                                                return {
+                                                                    ...tc,
+                                                                    executions: tc.executions.map(ex => {
+                                                                        if (ex.id === activeExecution) {
+                                                                            return {
+                                                                                ...ex,
+                                                                                passCriteria: {
+                                                                                    ...ex.passCriteria,
+                                                                                    rangeZ: parseInt(e.target.value) || 10
+                                                                                }
+                                                                            };
+                                                                        }
+                                                                        return ex;
+                                                                    })
+                                                                };
+                                                            }
+                                                            return tc;
+                                                        });
+                                                        setTestCases(updated);
+                                                    }}
+                                                    className="w-full px-1 py-1 border rounded"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* Statistics */}
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <h3 className="text-lg font-semibold mb-3">
+                                Overall Statistics
+                                {excludedCount > 0 && (
+                                    <span className="ml-2 text-sm font-normal text-gray-500">
+                                        ({excludedCount} excluded)
+                                    </span>
+                                )}
+                            </h3>
+                            <div className="grid grid-cols-5 gap-4 mb-4">
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-xl font-bold text-blue-600">
+                                        {formatMsToTime(stats.min)}
+                                    </div>
+                                    <div className="text-xs">Minimum</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-xl font-bold text-green-600">
+                                        {formatMsToTime(stats.avg)}
+                                    </div>
+                                    <div className="text-xs">Average</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-xl font-bold text-orange-600">
+                                        {formatMsToTime(stats.max)}
+                                    </div>
+                                    <div className="text-xs">Maximum</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-xl font-bold text-gray-600">
+                                        {currentExecution.timestamps.length}
+                                    </div>
+                                    <div className="text-xs">Total Events</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    {currentExecution.passCriteria.enabled ? (
+                                        <div>
+                                            <div className="text-xl font-bold">
+                                                <span className="text-green-600">{passed}</span>/
+                                                <span className="text-red-600">{failed}</span>
+                                            </div>
+                                            <div className="text-xs">Pass/Fail</div>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <div className="text-xl font-bold text-gray-400">-</div>
+                                            <div className="text-xs">No Criteria</div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            
+                            {/* Per-axis statistics */}
+                            <div className="border-t pt-3">
+                                <h4 className="text-sm font-semibold mb-2">Per-Axis Breakdown</h4>
+                                <div className="space-y-1">
+                                    {Object.entries(groups)
+                                        .filter(([key]) => key !== 'No Axis')
+                                        .map(([axis, timestamps]) => {
+                                            const axisStats = getAxisStatistics(timestamps, currentExecution.passCriteria);
+                                            const distance = currentExecution.rangesDetected?.[axis];
+                                            
+                                            return (
+                                                <div key={axis} className="flex justify-between text-sm bg-gray-50 p-2 rounded">
+                                                    <span className="font-medium">
+                                                        {axis} {distance ? '(' + distance + 'mm)' : ''}:
+                                                    </span>
+                                                    <span>
+                                                        Min: {formatMsToTime(axisStats.min)} | 
+                                                        Avg: {formatMsToTime(axisStats.avg)} | 
+                                                        Max: {formatMsToTime(axisStats.max)}
+                                                        {currentExecution.passCriteria.enabled && (
+                                                            <span> | Pass: {axisStats.passRate.toFixed(1)}% ({axisStats.passed}/{axisStats.total})</span>
+                                                        )}
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Timestamps - Grouped by Axis (Default) */}
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="text-lg font-semibold">Timestamps (Grouped by Axis)</h3>
+                                <button
+                                    onClick={() => handleAddToComparison(currentExecution)}
+                                    className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
+                                >
+                                    <Icon name="plus" /> Add to Comparison
+                                </button>
+                            </div>
+                            
+                            <div className="space-y-4">
+                                {Object.entries(groups).map(([axis, timestamps]) => {
+                                    const axisStats = getAxisStatistics(timestamps, currentExecution.passCriteria);
+                                    const distance = currentExecution.rangesDetected?.[axis];
+                                    
+                                    return (
+                                        <div key={axis} className="border rounded-lg overflow-hidden">
+                                            <div className="bg-gray-100 px-3 py-2">
+                                                <div className="flex justify-between items-center">
+                                                    <div className="font-medium text-sm">
+                                                        {axis} {distance ? '(' + distance + 'mm)' : ''} - {timestamps.length} events
+                                                    </div>
+                                                    <div className="flex gap-4 text-xs">
+                                                        <span className="text-blue-600">Min: {formatMsToTime(axisStats.min)}</span>
+                                                        <span className="text-green-600">Avg: {formatMsToTime(axisStats.avg)}</span>
+                                                        <span className="text-orange-600">Max: {formatMsToTime(axisStats.max)}</span>
+                                                        {currentExecution.passCriteria.enabled && (
+                                                            <span>Pass: {axisStats.passRate.toFixed(1)}%</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <table className="w-full text-sm">
+                                                <thead>
+                                                    <tr className="border-b bg-gray-50">
+                                                        <th className="text-left p-2">#</th>
+                                                        <th className="text-left p-2">Time (s)</th>
+                                                        <th className="text-left p-2">Record In</th>
+                                                        <th className="text-left p-2">Label</th>
+                                                        <th className="text-left p-2">Stage</th>
+                                                        <th className="text-left p-2">Note</th>
+                                                        <th className="text-left p-2">Latency</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {timestamps.map((ts, idx) => {
+                                                        const passFail = ts.latencyMs && currentExecution.passCriteria.enabled ?
+                                                            (ts.latencyMs <= currentExecution.passCriteria.maxLatency ? 'pass' : 'fail') : '';
+                                                        
+                                                        return (
+                                                            <tr key={ts.id} className={'border-b hover:bg-gray-50 ' +
+                                                                (ts.excludeFromStats ? 'row-error' : 
+                                                                showPassFailHighlight && passFail ? 
+                                                                    (passFail === 'pass' ? 'row-pass' : 'row-fail') : '')
+                                                            }>
+                                                                <td className="p-2">{idx + 1}</td>
+                                                                <td className="p-2">{ts.time}</td>
+                                                                <td className="p-2 text-xs text-gray-600">
+                                                                    {ts.recordIn || ''}
+                                                                    {ts.pairedRecordIn && (
+                                                                        <div>→ {ts.pairedRecordIn}</div>
+                                                                    )}
+                                                                </td>
+                                                                <td className="p-2">
+                                                                    <span className={'px-2 py-1 rounded text-xs ' +
+                                                                        (ts.label === 'Error' ? 'bg-red-100 text-red-700' :
+                                                                        ts.label === 'TagOn' ? 'bg-green-100 text-green-700' :
+                                                                        ts.label === 'TagOff' ? 'bg-cyan-100 text-cyan-700' :
+                                                                        'bg-gray-100 text-gray-700')
+                                                                    }>
+                                                                        {ts.label}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="p-2 text-xs">{ts.stage}</td>
+                                                                <td className="p-2 text-xs">
+                                                                    {ts.note}
+                                                                    {ts.calculationExplained && (
+                                                                        <div className="text-gray-500 italic">
+                                                                            {ts.calculationExplained}
+                                                                        </div>
+                                                                    )}
+                                                                </td>
+                                                                <td className="p-2 font-medium">
+                                                                    {ts.excludeFromStats && (
+                                                                        <span className="text-xs text-gray-400">(excluded) </span>
+                                                                    )}
+                                                                    {ts.latency || '-'}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        
+                        {/* Tips */}
+                        <div className="text-xs text-gray-500">
+                            💡 Tips:
+                            • Timestamps show original DaVinci timecodes
+                            • Distances show mm from face (e.g., X+: 10mm)
+                            • Pass/Fail criteria can be set per execution
+                            • Add executions to comparison for analysis
+                        </div>
+                    </div>
+                );
+            };
+            
+            // Main render
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {!dataLoaded ? (
+                        <div className="flex items-center justify-center h-screen">
+                            <div>Loading...</div>
+                        </div>
+                    ) : (
+                        <React.Fragment>
+                            {/* Header */}
+                            <div className="bg-white border-b px-6 py-4">
+                                <div className="flex justify-between items-center">
+                                    <h1 className="text-2xl font-bold">Hardware Latency Tester v3.6</h1>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => importRef.current?.click()}
+                                            className="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200"
+                                        >
+                                            <Icon name="upload" /> Import CSV
+                                        </button>
+                                        <button
+                                            onClick={exportToCSV}
+                                            className="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200"
+                                        >
+                                            <Icon name="download" /> Export CSV
+                                        </button>
+                                        <input
+                                            ref={importRef}
+                                            type="file"
+                                            accept=".csv"
+                                            onChange={handleFileImport}
+                                            className="hidden"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Navigation tabs */}
+                            <div className="bg-white border-b px-6">
+                                <div className="flex gap-6">
+                                    <button
+                                        onClick={() => setView('execution')}
+                                        className={'py-3 border-b-2 ' + 
+                                            (view === 'execution' ? 'border-blue-500 text-blue-600' : 'border-transparent')}
+                                    >
+                                        <Icon name="activity" /> Execution View
+                                    </button>
+                                    <button
+                                        onClick={() => setView('comparison')}
+                                        className={'py-3 border-b-2 ' + 
+                                            (view === 'comparison' ? 'border-blue-500 text-blue-600' : 'border-transparent')}
+                                    >
+                                        <Icon name="bar-chart-2" /> Comparison ({comparisonSets.length})
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Content */}
+                            <div className="flex">
+                                {/* Sidebar */}
+                                <div className="w-64 bg-white border-r min-h-screen p-4">
+                                    <div className="mb-4">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <h3 className="font-semibold">Test Cases</h3>
+                                            <button
+                                                onClick={() => {
+                                                    const newTestCase = createNewTestCase();
+                                                    setTestCases([...testCases, newTestCase]);
+                                                    setActiveTestCase(newTestCase.id);
+                                                    setActiveExecution(newTestCase.executions[0].id);
+                                                }}
+                                                className="p-1 hover:bg-gray-100 rounded"
+                                            >
+                                                <Icon name="plus" />
+                                            </button>
+                                        </div>
+                                        
+                                        <div className="space-y-2">
+                                            {testCases.map(tc => (
+                                                <div key={tc.id} className="border rounded">
+                                                    <button
+                                                        onClick={() => {
+                                                            setActiveTestCase(tc.id);
+                                                            if (tc.executions.length > 0) {
+                                                                setActiveExecution(tc.executions[0].id);
+                                                            }
+                                                        }}
+                                                        className={'w-full text-left p-2 hover:bg-gray-50 ' +
+                                                            (activeTestCase === tc.id ? 'bg-blue-50' : '')}
+                                                    >
+                                                        <div className="text-sm font-medium">{tc.name}</div>
+                                                        {tc.metadata?.abNumber && (
+                                                            <div className="text-xs text-gray-500">
+                                                                {tc.metadata.abNumber}
+                                                            </div>
+                                                        )}
+                                                        <div className="text-xs text-gray-500">{tc.executions.length} executions</div>
+                                                    </button>
+                                                    
+                                                    {activeTestCase === tc.id && (
+                                                        <div className="border-t">
+                                                            <div className="px-2 py-1 bg-gray-50 text-xs font-medium">
+                                                                Executions
+                                                            </div>
+                                                            {tc.executions.map(ex => (
+                                                                <button
+                                                                    key={ex.id}
+                                                                    onClick={() => setActiveExecution(ex.id)}
+                                                                    className={'w-full text-left px-4 py-1.5 text-sm hover:bg-gray-100 ' +
+                                                                        (activeExecution === ex.id ? 'bg-blue-100' : '')}
+                                                                >
+                                                                    {ex.name}
+                                                                </button>
+                                                            ))}
+                                                            <button
+                                                                onClick={() => {
+                                                                    const newExecution = createNewExecution();
+                                                                    const updated = testCases.map(testCase => {
+                                                                        if (testCase.id === tc.id) {
+                                                                            return {
+                                                                                ...testCase,
+                                                                                executions: [...testCase.executions, newExecution]
+                                                                            };
+                                                                        }
+                                                                        return testCase;
+                                                                    });
+                                                                    setTestCases(updated);
+                                                                    setActiveExecution(newExecution.id);
+                                                                }}
+                                                                className="w-full text-left px-4 py-1.5 text-sm hover:bg-gray-100 text-blue-600"
+                                                            >
+                                                                <Icon name="plus" /> New Execution
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Main content */}
+                                <div className="flex-1 p-6">
+                                    {view === 'execution' && renderExecutionView()}
+                                    {view === 'comparison' && (
+                                        <div className="bg-white rounded-lg shadow p-4">
+                                            <h3 className="text-lg font-semibold mb-3">Comparison View</h3>
+                                            {comparisonSets.length === 0 ? (
+                                                <p className="text-gray-500">No executions added for comparison yet.</p>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {comparisonSets.map(comp => (
+                                                        <div key={comp.id} className="border rounded p-2">
+                                                            <div className="flex justify-between items-center">
+                                                                <span className="font-medium">{comp.name}</span>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setComparisonSets(comparisonSets.filter(c => c.id !== comp.id));
+                                                                    }}
+                                                                    className="text-red-500 hover:bg-red-50 p-1 rounded"
+                                                                >
+                                                                    <Icon name="x" />
+                                                                </button>
+                                                            </div>
+                                                            <div className="text-xs text-gray-500">
+                                                                {comp.data.length} events
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </React.Fragment>
+                    )}
+                </div>
+            );
+        };
+        
+        // Render
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<LatencyTester />);
+    </script>
+</body>
+</html>

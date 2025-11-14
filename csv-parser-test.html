@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CSV Parser Test</title>
+</head>
+<body>
+    <h1>CSV Parser Debug Test</h1>
+    <input type="file" id="fileInput" accept=".csv">
+    <div id="output"></div>
+    
+    <script>
+        // Parse marker naming schemes
+        function parseMarkerName(markerName) {
+            // Yellow marker format: "AB6 Single Tag1.0 (X+)"
+            const yellowRegex = /AB(\d+)\s+(.+?)\s+Tag([\d.]+)\s*\(([XYZ])([+-])\)/i;
+            const yellowMatch = markerName.match(yellowRegex);
+            
+            if (yellowMatch) {
+                return {
+                    type: 'identifier',
+                    abNumber: `AB${yellowMatch[1]}`,
+                    descriptor: yellowMatch[2],
+                    tagVersion: yellowMatch[3],
+                    axis: yellowMatch[4].toUpperCase(),
+                    direction: yellowMatch[5]
+                };
+            }
+            
+            // Action marker format: "TagOn #1", "TagOnActivation #23"
+            const actionRegex = /Tag(\w+)\s+#(\d+)/i;
+            const actionMatch = markerName.match(actionRegex);
+            
+            if (actionMatch) {
+                return {
+                    type: 'action',
+                    tagAction: actionMatch[1],
+                    testRun: actionMatch[2]
+                };
+            }
+            
+            return null;
+        }
+        
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const lines = text.split('\n');
+                
+                const output = document.getElementById('output');
+                let html = '<h2>Parsing Results</h2>';
+                let currentMetadata = null;
+                let axesFound = new Set();
+                
+                for (let i = 1; i < lines.length && i < 150; i++) {
+                    const line = lines[i];
+                    if (!line.trim()) continue;
+                    
+                    // Parse CSV line
+                    const parts = line.split('","');
+                    if (parts.length < 21) continue;
+                    
+                    const color = parts[18].replace(/"/g, '').toLowerCase();
+                    const notes = parts[19].replace(/"/g, '');
+                    
+                    if (color === 'yellow') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'identifier') {
+                            currentMetadata = parsed;
+                            axesFound.add(parsed.axis + parsed.direction);
+                            html += `<div style="background: yellow; padding: 5px; margin: 5px;">
+                                Line ${i}: YELLOW - ${notes}<br>
+                                Parsed: ${JSON.stringify(parsed)}<br>
+                                <strong>Current Axis: ${parsed.axis}${parsed.direction}</strong>
+                            </div>`;
+                        }
+                    } else if (color === 'green' || color === 'pink') {
+                        const parsed = parseMarkerName(notes);
+                        html += `<div style="background: ${color === 'green' ? 'lightgreen' : 'pink'}; padding: 5px; margin: 5px;">
+                            Line ${i}: ${color.toUpperCase()} - ${notes}<br>
+                            Parsed: ${JSON.stringify(parsed)}<br>
+                            Using metadata: ${currentMetadata ? currentMetadata.axis + currentMetadata.direction : 'NONE'}
+                        </div>`;
+                    }
+                }
+                
+                html = `<h3>Axes Found: ${Array.from(axesFound).join(', ')}</h3>` + html;
+                output.innerHTML = html;
+            };
+            
+            reader.readAsText(file);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,1980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Latency Tester - Enhanced v3.1</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    
+    <!-- Print Styles -->
+    <style>
+        @media print {
+            .no-print { display: none !important; }
+            body { font-size: 12pt; }
+            table { page-break-inside: auto; }
+            tr { page-break-inside: avoid; page-break-after: auto; }
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        
+        /* Loading animation */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        
+        /* Pass/Fail row highlighting */
+        .row-pass { background-color: #f0fdf4 !important; }
+        .row-fail { background-color: #fef2f2 !important; }
+        .row-error { background-color: #fefce8 !important; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        // Icon component wrapper for Lucide
+        const Icon = ({ name, className = "w-4 h-4" }) => {
+            useEffect(() => {
+                lucide.createIcons();
+            }, []);
+            return <i data-lucide={name} className={className}></i>;
+        };
+        
+        const LatencyTester = () => {
+            // State Management with localStorage persistence
+            const [testCases, setTestCases] = useState([]);
+            const [activeTestCase, setActiveTestCase] = useState(null);
+            const [activeExecution, setActiveExecution] = useState(null);
+            const [view, setView] = useState('execution');
+            const [comparisonSets, setComparisonSets] = useState([]);
+            const [lastSaved, setLastSaved] = useState(null);
+            const [autoSave, setAutoSave] = useState(true);
+            const [dataLoaded, setDataLoaded] = useState(false);
+            const [storageAvailable, setStorageAvailable] = useState(true);
+            
+            // New states for enhanced features
+            const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+            const [groupByAxis, setGroupByAxis] = useState(true); // Default to grouped view
+            const [showPassFailHighlight, setShowPassFailHighlight] = useState(false);
+            const [testMetadata, setTestMetadata] = useState({});
+            
+            const fileInputRef = useRef(null);
+            const importRef = useRef(null);
+            
+            // Check if localStorage is available
+            const checkStorageAvailable = () => {
+                try {
+                    const testKey = '__localStorage_test__';
+                    localStorage.setItem(testKey, 'test');
+                    localStorage.removeItem(testKey);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            };
+            
+            // Local Storage Keys
+            const STORAGE_KEYS = {
+                testCases: 'latencyTester_testCases',
+                activeTestCase: 'latencyTester_activeTestCase',
+                activeExecution: 'latencyTester_activeExecution',
+                comparisonSets: 'latencyTester_comparisonSets',
+                view: 'latencyTester_view',
+                autoSave: 'latencyTester_autoSave',
+                sortConfig: 'latencyTester_sortConfig',
+                groupByAxis: 'latencyTester_groupByAxis',
+                showPassFailHighlight: 'latencyTester_showPassFailHighlight'
+            };
+            
+            // Helper Functions
+            function createNewTestCase() {
+                const id = Date.now().toString();
+                return {
+                    id,
+                    name: `Test Case ${new Date().toLocaleString()}`,
+                    environment: {
+                        modelSKU: '',
+                        abVersion: '',
+                        tagVersion: '',
+                        fwVersion: '',
+                        assetPackVersion: '',
+                        payloadVersion: '',
+                        links: []
+                    },
+                    metadata: {
+                        abNumber: '',
+                        testDescriptor: '',
+                        tagVersion: '',
+                        axis: ''
+                    },
+                    executions: [createNewExecution()],
+                    createdAt: new Date().toISOString()
+                };
+            }
+            
+            function createNewExecution() {
+                return {
+                    id: Date.now().toString() + Math.random(),
+                    name: `Execution ${new Date().toLocaleTimeString()}`,
+                    tagNumbers: [],
+                    tagIds: [],
+                    timestamps: [],
+                    passCriteria: { enabled: false, maxLatency: 100 },
+                    notes: ''
+                };
+            }
+            
+            function createNewTimestamp() {
+                return {
+                    id: Date.now().toString() + Math.random(),
+                    time: '',
+                    label: 'TagOff',
+                    note: '',
+                    stage: '',
+                    axis: '',
+                    abNumber: '',
+                    tagVersion: '',
+                    isUnmatched: false
+                };
+            }
+            
+            function parseTimeToMs(timeStr) {
+                if (!timeStr) return null;
+                const parts = timeStr.replace(':', '.').split('.');
+                if (parts.length === 2) {
+                    const seconds = parseFloat(parts[0]);
+                    const ms = parseFloat(parts[1]);
+                    return seconds * 1000 + ms;
+                }
+                return parseFloat(timeStr) * 1000;
+            }
+            
+            function formatMsToTime(ms) {
+                if (ms === null || ms === undefined) return '-';
+                const seconds = Math.floor(ms / 1000);
+                const milliseconds = Math.round(ms % 1000);
+                return `${seconds}.${milliseconds.toString().padStart(3, '0')}`;
+            }
+            
+            // Parse marker naming schemes
+            function parseMarkerName(markerName) {
+                // Yellow marker format: "AB6 Single Tag1.0 (X+)"
+                const yellowRegex = /AB(\d+)\s+(.+?)\s+Tag([\d.]+)\s*\(([XYZ])([+-])\)/i;
+                const yellowMatch = markerName.match(yellowRegex);
+                
+                if (yellowMatch) {
+                    return {
+                        type: 'identifier',
+                        abNumber: `AB${yellowMatch[1]}`,
+                        descriptor: yellowMatch[2],
+                        tagVersion: yellowMatch[3],
+                        axis: yellowMatch[4].toUpperCase(),
+                        direction: yellowMatch[5]
+                    };
+                }
+                
+                // Action marker format: "TagOn #1", "TagOnActivation #23"
+                const actionRegex = /Tag(\w+)\s+#(\d+)/i;
+                const actionMatch = markerName.match(actionRegex);
+                
+                if (actionMatch) {
+                    return {
+                        type: 'action',
+                        tagAction: actionMatch[1],
+                        testRun: actionMatch[2]
+                    };
+                }
+                
+                return null;
+            }
+            
+            // Parse timecode to milliseconds
+            const parseTimecode = (timecode, fps = 30) => {
+                const parts = timecode.split(':');
+                if (parts.length === 4) {
+                    const hours = parseInt(parts[0], 10);
+                    const minutes = parseInt(parts[1], 10);
+                    const seconds = parseInt(parts[2], 10);
+                    const frames = parseInt(parts[3], 10);
+                    
+                    const totalMs = (hours * 3600000) + 
+                                   (minutes * 60000) + 
+                                   (seconds * 1000) + 
+                                   ((frames / fps) * 1000);
+                    
+                    return totalMs;
+                }
+                return 0;
+            };
+            
+            // Convert milliseconds to seconds format
+            const msToSecondsFormat = (ms) => {
+                const totalSeconds = ms / 1000;
+                const seconds = Math.floor(totalSeconds);
+                const milliseconds = Math.round((totalSeconds - seconds) * 1000);
+                return `${seconds}.${milliseconds.toString().padStart(3, '0')}`;
+            };
+            
+            // Enhanced DaVinci CSV parser
+            const parseDavinciCSV = (csvText) => {
+                console.log('Starting CSV parse...');
+                const lines = csvText.split('\n').filter(line => line.trim());
+                if (lines.length < 2) return null;
+                
+                const parseCSVLine = (line) => {
+                    const result = [];
+                    let current = '';
+                    let inQuotes = false;
+                    
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            result.push(current.trim());
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    result.push(current.trim());
+                    return result;
+                };
+                
+                const dataRows = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const row = parseCSVLine(lines[i]);
+                    if (row.length > 20) {
+                        dataRows.push({
+                            recordIn: row[9] || '',
+                            color: row[19] || '',
+                            notes: row[20] || '',
+                            fps: parseFloat(row[17]) || 30
+                        });
+                    }
+                }
+                
+                console.log(`Parsed ${dataRows.length} data rows`);
+                
+                const timestamps = [];
+                const tagGroups = {};
+                const pendingMarkers = {};
+                let currentMetadata = {};
+                let inErrorZone = false;
+                let axesFound = new Set();
+                
+                dataRows.forEach((row, index) => {
+                    const color = row.color.toLowerCase();
+                    const notes = row.notes;
+                    const timeMs = parseTimecode(row.recordIn, row.fps);
+                    const timeStr = msToSecondsFormat(timeMs);
+                    
+                    // Skip blue markers (placeholders)
+                    if (color === 'blue') return;
+                    
+                    // Red markers indicate error zones - exclude from statistics
+                    if (color === 'red') {
+                        inErrorZone = !inErrorZone; // Toggle error zone
+                        timestamps.push({
+                            id: Date.now().toString() + Math.random(),
+                            time: timeStr,
+                            label: 'Error',
+                            note: `Error Zone ${inErrorZone ? 'Start' : 'End'}: ${notes}`,
+                            stage: '',
+                            pairedTime: '',
+                            latency: '',
+                            latencyMs: null,
+                            axis: '',
+                            direction: '',
+                            abNumber: '',
+                            tagVersion: '',
+                            isUnmatched: false,
+                            excludeFromStats: true
+                        });
+                        return;
+                    }
+                    
+                    if (color === 'yellow') {
+                        // Yellow: Identifier markers
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'identifier') {
+                            currentMetadata = parsed;
+                            axesFound.add(parsed.axis + parsed.direction);
+                            console.log(`Yellow marker at row ${index}: ${notes}`);
+                            console.log('Updated metadata:', currentMetadata);
+                        }
+                        
+                        // Also store in tagGroups if there's a tag number
+                        const match = notes.match(/#(\d+)/);
+                        if (match) {
+                            const tagNum = match[1];
+                            if (!tagGroups[tagNum]) {
+                                tagGroups[tagNum] = {
+                                    name: notes,
+                                    metadata: currentMetadata,
+                                    tagOnEvents: [],
+                                    tagOffEvents: []
+                                };
+                            }
+                        }
+                    } else if (color === 'green') {
+                        // Green: TagOn Action Marker
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = `tagOn-${parsed.testRun}`;
+                            
+                            // Use current metadata from most recent yellow marker
+                            const markerMetadata = currentMetadata || {};
+                            
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                timeMs: timeMs,
+                                tagAction: parsed.tagAction,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: markerMetadata,
+                                excludeFromStats: inErrorZone
+                            };
+                        }
+                    } else if (color === 'pink') {
+                        // Pink: TagOn Experience Activation Marker
+                        // Find the most recent unpaired Green marker (regardless of number)
+                        const tagOnKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOn-'));
+                        if (tagOnKeys.length > 0) {
+                            // Get the most recent tagOn marker
+                            const lastKey = tagOnKeys[tagOnKeys.length - 1];
+                            const tagOnMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+                            
+                            const latency = timeMs - tagOnMarker.timeMs;
+                            
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOnMarker.time,
+                                label: 'TagOn',
+                                note: `${tagOnMarker.notes} → ${notes}`,
+                                stage: `Tag${tagOnMarker.metadata?.tagVersion || '1.0'} Run#${tagOnMarker.testRun}`,
+                                pairedTime: timeStr,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOnMarker.metadata?.axis || '',
+                                direction: tagOnMarker.metadata?.direction || '',
+                                abNumber: tagOnMarker.metadata?.abNumber || '',
+                                tagVersion: tagOnMarker.metadata?.tagVersion || '',
+                                testRun: tagOnMarker.testRun,
+                                isUnmatched: false,
+                                excludeFromStats: tagOnMarker.excludeFromStats,
+                                recordIn: tagOnMarker.time,
+                                recordInPaired: timeStr,
+                                calculationExplained: `${tagOnMarker.time} → ${timeStr} = ${msToSecondsFormat(latency)}`
+                            });
+                            
+                            // Add to tag group if it exists
+                            if (tagGroups[tagOnMarker.testRun]) {
+                                tagGroups[tagOnMarker.testRun].tagOnEvents.push({
+                                    run: tagOnMarker.testRun,
+                                    triggerTime: tagOnMarker.time,
+                                    experienceTime: timeStr,
+                                    latency: latency
+                                });
+                            }
+                        }
+                    } else if (color === 'cyan') {
+                        // Cyan: TagOff Action Marker
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = `tagOff-${parsed.testRun}`;
+                            
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                timeMs: timeMs,
+                                tagAction: parsed.tagAction,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata,
+                                excludeFromStats: inErrorZone
+                            };
+                        }
+                    } else if (color === 'lemon' || color === 'lime') {
+                        // Lemon: TagOff Experience Activation Marker
+                        const tagOffKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOff-'));
+                        if (tagOffKeys.length > 0) {
+                            const lastKey = tagOffKeys[tagOffKeys.length - 1];
+                            const tagOffMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+                            
+                            const latency = timeMs - tagOffMarker.timeMs;
+                            
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOffMarker.time,
+                                label: 'TagOff',
+                                note: `${tagOffMarker.notes} → ${notes}`,
+                                stage: `Tag${tagOffMarker.metadata?.tagVersion || '1.0'} Run#${tagOffMarker.testRun}`,
+                                pairedTime: timeStr,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOffMarker.metadata?.axis || '',
+                                direction: tagOffMarker.metadata?.direction || '',
+                                abNumber: tagOffMarker.metadata?.abNumber || '',
+                                tagVersion: tagOffMarker.metadata?.tagVersion || '',
+                                testRun: tagOffMarker.testRun,
+                                isUnmatched: false,
+                                excludeFromStats: tagOffMarker.excludeFromStats,
+                                recordIn: tagOffMarker.time,
+                                recordInPaired: timeStr,
+                                calculationExplained: `${tagOffMarker.time} → ${timeStr} = ${msToSecondsFormat(latency)}`
+                            });
+                            
+                            if (tagGroups[tagOffMarker.testRun]) {
+                                tagGroups[tagOffMarker.testRun].tagOffEvents.push({
+                                    run: tagOffMarker.testRun,
+                                    triggerTime: tagOffMarker.time,
+                                    experienceTime: timeStr,
+                                    latency: latency
+                                });
+                            }
+                        }
+                    }
+                });
+                
+                // Mark unpaired markers as unmatched/errors
+                Object.values(pendingMarkers).forEach(marker => {
+                    const label = marker.tagAction?.includes('On') ? 'TagOn' : 'TagOff';
+                    timestamps.push({
+                        id: Date.now().toString() + Math.random(),
+                        time: marker.time,
+                        label: 'Error',
+                        note: `${marker.notes} (UNMATCHED - No activation marker)`,
+                        stage: `Run-${marker.testRun}`,
+                        pairedTime: '',
+                        latency: '',
+                        latencyMs: null,
+                        axis: marker.metadata?.axis || '',
+                        direction: marker.metadata?.direction || '',
+                        abNumber: marker.metadata?.abNumber || '',
+                        tagVersion: marker.metadata?.tagVersion || '',
+                        isUnmatched: true,
+                        excludeFromStats: true
+                    });
+                });
+                
+                // Sort timestamps by time
+                timestamps.sort((a, b) => {
+                    const aMs = parseTimeToMs(a.time);
+                    const bMs = parseTimeToMs(b.time);
+                    return aMs - bMs;
+                });
+                
+                console.log(`CSV Parse Complete:`);
+                console.log(`- Total timestamps: ${timestamps.length}`);
+                console.log(`- Axes found: ${Array.from(axesFound).join(', ')}`);
+                console.log(`- Unmatched markers: ${Object.keys(pendingMarkers).length}`);
+                
+                return {
+                    timestamps,
+                    tagGroups,
+                    metadata: currentMetadata,
+                    sourceFile: 'DaVinci Resolve Import (Enhanced v3)',
+                    axesFound: Array.from(axesFound)
+                };
+            };
+            
+            // Sorting function
+            const sortTimestamps = (timestamps, config) => {
+                if (!config.key) return timestamps;
+                
+                return [...timestamps].sort((a, b) => {
+                    let aVal, bVal;
+                    
+                    switch (config.key) {
+                        case 'index':
+                            // Original order
+                            return 0;
+                        case 'time':
+                            aVal = parseTimeToMs(a.time) || 0;
+                            bVal = parseTimeToMs(b.time) || 0;
+                            break;
+                        case 'latency':
+                            aVal = a.latencyMs || 0;
+                            bVal = b.latencyMs || 0;
+                            break;
+                        case 'label':
+                            aVal = a.label;
+                            bVal = b.label;
+                            break;
+                        case 'axis':
+                            aVal = `${a.axis}${a.direction || ''}`;
+                            bVal = `${b.axis}${b.direction || ''}`;
+                            break;
+                        default:
+                            return 0;
+                    }
+                    
+                    if (aVal < bVal) return config.direction === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return config.direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            };
+            
+            // Group by axis function
+            const groupTimestampsByAxis = (timestamps) => {
+                const groups = {};
+                timestamps.forEach(ts => {
+                    const key = ts.axis ? `${ts.axis}${ts.direction || ''}` : 'No Axis';
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(ts);
+                });
+                return groups;
+            };
+            
+            // Calculate statistics for an axis group
+            function getAxisStatistics(timestamps, passCriteria) {
+                const validTimestamps = timestamps.filter(ts => ts.latencyMs && !ts.excludeFromStats);
+                
+                if (validTimestamps.length === 0) {
+                    return { 
+                        min: 0, 
+                        max: 0, 
+                        avg: 0, 
+                        total: 0,
+                        passed: 0,
+                        failed: 0,
+                        errors: 0,
+                        passRate: 0,
+                        outliers: []
+                    };
+                }
+                
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const sorted = [...values].sort((a, b) => a - b);
+                const min = sorted[0];
+                const max = sorted[sorted.length - 1];
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                
+                // Calculate pass/fail counts
+                let passed = 0;
+                let failed = 0;
+                
+                if (passCriteria && passCriteria.enabled) {
+                    validTimestamps.forEach(ts => {
+                        if (ts.latencyMs <= passCriteria.maxLatency) {
+                            passed++;
+                        } else {
+                            failed++;
+                        }
+                    });
+                }
+                
+                const errors = timestamps.filter(ts => ts.isUnmatched || ts.label === 'Error').length;
+                const passRate = validTimestamps.length > 0 ? (passed / validTimestamps.length) * 100 : 0;
+                
+                // Outlier detection
+                const q1 = sorted[Math.floor(sorted.length * 0.25)];
+                const q3 = sorted[Math.floor(sorted.length * 0.75)];
+                const iqr = q3 - q1;
+                const lowerBound = q1 - 1.5 * iqr;
+                const upperBound = q3 + 1.5 * iqr;
+                
+                const outliers = validTimestamps.filter(ts => 
+                    ts.latencyMs < lowerBound || ts.latencyMs > upperBound
+                );
+                
+                return { 
+                    min, 
+                    max, 
+                    avg, 
+                    total: validTimestamps.length,
+                    passed,
+                    failed,
+                    errors,
+                    passRate,
+                    outliers 
+                };
+            }
+            
+            // Detect tested axis ranges from the data
+            function getTestedAxisRanges(timestamps) {
+                const ranges = {
+                    X: { tested: false, positive: false, negative: false, range: '' },
+                    Y: { tested: false, positive: false, negative: false, range: '' },
+                    Z: { tested: false, positive: false, negative: false, range: '' }
+                };
+                
+                timestamps.forEach(ts => {
+                    if (ts.axis && ts.direction) {
+                        const axis = ts.axis.toUpperCase();
+                        if (ranges[axis]) {
+                            ranges[axis].tested = true;
+                            if (ts.direction === '+') {
+                                ranges[axis].positive = true;
+                            } else if (ts.direction === '-') {
+                                ranges[axis].negative = true;
+                            }
+                        }
+                    }
+                });
+                
+                // Format range strings
+                Object.keys(ranges).forEach(axis => {
+                    const r = ranges[axis];
+                    if (r.tested) {
+                        if (r.positive && r.negative) {
+                            r.range = `${axis}(-) to ${axis}(+)`;
+                        } else if (r.positive) {
+                            r.range = `${axis}(+) only`;
+                        } else if (r.negative) {
+                            r.range = `${axis}(-) only`;
+                        }
+                    }
+                });
+                
+                return ranges;
+            }
+            
+            function calculateLatencies(timestamps) {
+                const latencies = [];
+                
+                // Filter out items that should be excluded from stats
+                const validTimestamps = timestamps.filter(ts => !ts.excludeFromStats);
+                
+                // Collect pre-calculated latencies from paired markers
+                validTimestamps.forEach(ts => {
+                    if (ts.latencyMs) {
+                        latencies.push({
+                            value: ts.latencyMs,
+                            from: { 
+                                time: ts.time, 
+                                label: ts.label,
+                                note: ts.note.split(' → ')[0] || ts.note 
+                            },
+                            to: { 
+                                time: ts.pairedTime || ts.time,
+                                label: 'Experience',
+                                note: ts.note.split(' → ')[1] || 'Response'
+                            },
+                            isPaired: true,
+                            axis: ts.axis,
+                            direction: ts.direction
+                        });
+                    }
+                });
+                
+                // Calculate sequential latencies for non-paired timestamps
+                const sortedTimestamps = [...validTimestamps]
+                    .filter(ts => ts.time && !ts.latencyMs)
+                    .sort((a, b) => parseTimeToMs(a.time) - parseTimeToMs(b.time));
+                
+                for (let i = 1; i < sortedTimestamps.length; i++) {
+                    const prevTime = parseTimeToMs(sortedTimestamps[i - 1].time);
+                    const currTime = parseTimeToMs(sortedTimestamps[i].time);
+                    if (prevTime !== null && currTime !== null) {
+                        latencies.push({
+                            value: currTime - prevTime,
+                            from: sortedTimestamps[i - 1],
+                            to: sortedTimestamps[i],
+                            isPaired: false
+                        });
+                    }
+                }
+                
+                return latencies;
+            }
+            
+            function getStatistics(latencies) {
+                if (latencies.length === 0) return { min: 0, max: 0, avg: 0, outliers: [] };
+                
+                const values = latencies.map(l => l.value);
+                const sorted = [...values].sort((a, b) => a - b);
+                const min = sorted[0];
+                const max = sorted[sorted.length - 1];
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                
+                const q1 = sorted[Math.floor(sorted.length * 0.25)];
+                const q3 = sorted[Math.floor(sorted.length * 0.75)];
+                const iqr = q3 - q1;
+                const lowerBound = q1 - 1.5 * iqr;
+                const upperBound = q3 + 1.5 * iqr;
+                
+                const outliers = latencies.filter(l => 
+                    l.value < lowerBound || l.value > upperBound
+                );
+                
+                return { min, max, avg, outliers };
+            }
+            
+            // Load data from localStorage
+            useEffect(() => {
+                const isStorageAvailable = checkStorageAvailable();
+                setStorageAvailable(isStorageAvailable);
+                
+                const loadFromStorage = () => {
+                    if (!isStorageAvailable) {
+                        const defaultTestCase = createNewTestCase();
+                        setTestCases([defaultTestCase]);
+                        setActiveTestCase(defaultTestCase.id);
+                        setActiveExecution(defaultTestCase.executions[0].id);
+                        setDataLoaded(true);
+                        return;
+                    }
+                    
+                    try {
+                        const savedTestCases = localStorage.getItem(STORAGE_KEYS.testCases);
+                        const savedActiveTestCase = localStorage.getItem(STORAGE_KEYS.activeTestCase);
+                        const savedActiveExecution = localStorage.getItem(STORAGE_KEYS.activeExecution);
+                        const savedComparisonSets = localStorage.getItem(STORAGE_KEYS.comparisonSets);
+                        const savedView = localStorage.getItem(STORAGE_KEYS.view);
+                        const savedAutoSave = localStorage.getItem(STORAGE_KEYS.autoSave);
+                        const savedSortConfig = localStorage.getItem(STORAGE_KEYS.sortConfig);
+                        const savedGroupByAxis = localStorage.getItem(STORAGE_KEYS.groupByAxis);
+                        const savedShowPassFailHighlight = localStorage.getItem(STORAGE_KEYS.showPassFailHighlight);
+                        
+                        if (savedTestCases) {
+                            const parsedTestCases = JSON.parse(savedTestCases);
+                            setTestCases(parsedTestCases);
+                            
+                            if (savedActiveTestCase) setActiveTestCase(savedActiveTestCase);
+                            if (savedActiveExecution) setActiveExecution(savedActiveExecution);
+                            if (savedComparisonSets) setComparisonSets(JSON.parse(savedComparisonSets));
+                            if (savedView) setView(savedView);
+                            if (savedAutoSave !== null) setAutoSave(JSON.parse(savedAutoSave));
+                            if (savedSortConfig) setSortConfig(JSON.parse(savedSortConfig));
+                            if (savedGroupByAxis !== null) setGroupByAxis(JSON.parse(savedGroupByAxis));
+                            if (savedShowPassFailHighlight !== null) setShowPassFailHighlight(JSON.parse(savedShowPassFailHighlight));
+                            
+                            setLastSaved(new Date());
+                            setDataLoaded(true);
+                        } else {
+                            const defaultTestCase = createNewTestCase();
+                            setTestCases([defaultTestCase]);
+                            setActiveTestCase(defaultTestCase.id);
+                            setActiveExecution(defaultTestCase.executions[0].id);
+                            setDataLoaded(true);
+                        }
+                    } catch (error) {
+                        console.error('Error loading from localStorage:', error);
+                        const defaultTestCase = createNewTestCase();
+                        setTestCases([defaultTestCase]);
+                        setActiveTestCase(defaultTestCase.id);
+                        setActiveExecution(defaultTestCase.executions[0].id);
+                        setDataLoaded(true);
+                    }
+                };
+                
+                setTimeout(loadFromStorage, 100);
+            }, []);
+            
+            // Auto-save to localStorage
+            useEffect(() => {
+                if (autoSave && testCases.length > 0 && storageAvailable && dataLoaded) {
+                    const saveToStorage = () => {
+                        try {
+                            localStorage.setItem(STORAGE_KEYS.testCases, JSON.stringify(testCases));
+                            localStorage.setItem(STORAGE_KEYS.activeTestCase, activeTestCase || '');
+                            localStorage.setItem(STORAGE_KEYS.activeExecution, activeExecution || '');
+                            localStorage.setItem(STORAGE_KEYS.comparisonSets, JSON.stringify(comparisonSets));
+                            localStorage.setItem(STORAGE_KEYS.view, view);
+                            localStorage.setItem(STORAGE_KEYS.autoSave, JSON.stringify(autoSave));
+                            localStorage.setItem(STORAGE_KEYS.sortConfig, JSON.stringify(sortConfig));
+                            localStorage.setItem(STORAGE_KEYS.groupByAxis, JSON.stringify(groupByAxis));
+                            localStorage.setItem(STORAGE_KEYS.showPassFailHighlight, JSON.stringify(showPassFailHighlight));
+                            setLastSaved(new Date());
+                        } catch (error) {
+                            console.error('Error saving to localStorage:', error);
+                        }
+                    };
+                    
+                    const timeoutId = setTimeout(saveToStorage, 500);
+                    return () => clearTimeout(timeoutId);
+                }
+            }, [testCases, activeTestCase, activeExecution, comparisonSets, view, autoSave, sortConfig, groupByAxis, showPassFailHighlight, storageAvailable, dataLoaded]);
+            
+            // Update Lucide icons
+            useEffect(() => {
+                lucide.createIcons();
+            });
+            
+            // Event Handlers
+            const handleSort = (key) => {
+                setSortConfig(prev => ({
+                    key,
+                    direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+                }));
+            };
+            
+            const handleAddTimestamp = () => {
+                if (!currentExecution) return;
+                
+                const newTimestamp = createNewTimestamp();
+                const updatedTestCases = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return { ...ex, timestamps: [...ex.timestamps, newTimestamp] };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updatedTestCases);
+            };
+            
+            const handleTimestampChange = (timestampId, field, value) => {
+                const updatedTestCases = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.map(ts => {
+                                            if (ts.id === timestampId) {
+                                                return { ...ts, [field]: value };
+                                            }
+                                            return ts;
+                                        })
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updatedTestCases);
+            };
+            
+            const handleDeleteTimestamp = (timestampId) => {
+                const updatedTestCases = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.filter(ts => ts.id !== timestampId)
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updatedTestCases);
+            };
+            
+            const handleFileImport = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const content = event.target.result;
+                        
+                        if (file.name.toLowerCase().endsWith('.json')) {
+                            try {
+                                const data = JSON.parse(content);
+                                if (data.testCases) {
+                                    setTestCases(data.testCases);
+                                    if (data.activeTestCase) setActiveTestCase(data.activeTestCase);
+                                    if (data.activeExecution) setActiveExecution(data.activeExecution);
+                                    if (data.comparisonSets) setComparisonSets(data.comparisonSets);
+                                    alert('JSON data imported successfully!');
+                                }
+                            } catch (error) {
+                                alert('Failed to import JSON file. Please ensure it\'s a valid export.');
+                            }
+                        } else if (file.name.toLowerCase().endsWith('.csv')) {
+                            try {
+                                const result = parseDavinciCSV(content);
+                                if (result && result.timestamps.length > 0) {
+                                    const newTestCase = createNewTestCase();
+                                    newTestCase.name = `DaVinci Import - ${new Date().toLocaleString()}`;
+                                    newTestCase.metadata = result.metadata || {};
+                                    newTestCase.metadata.axesFound = result.axesFound || [];
+                                    
+                                    newTestCase.executions[0].name = file.name;
+                                    newTestCase.executions[0].timestamps = result.timestamps;
+                                    newTestCase.executions[0].notes = `Imported from ${file.name}\nTotal events: ${result.timestamps.length}`;
+                                    newTestCase.executions[0].axesFound = result.axesFound || [];
+                                    
+                                    setTestCases([...testCases, newTestCase]);
+                                    setActiveTestCase(newTestCase.id);
+                                    setActiveExecution(newTestCase.executions[0].id);
+                                    
+                                    const tagCount = Object.keys(result.tagGroups).length;
+                                    const pairedCount = result.timestamps.filter(ts => ts.pairedTime).length;
+                                    const unmatchedCount = result.timestamps.filter(ts => ts.isUnmatched).length;
+                                    const axesInfo = result.axesFound && result.axesFound.length > 0 ? 
+                                        `\n- Axes detected: ${result.axesFound.join(', ')}` : '';
+                                    
+                                    alert(`DaVinci CSV imported!\n\n- Tags: ${tagCount}\n- Paired events: ${pairedCount}\n- Unmatched (Errors): ${unmatchedCount}\n- Total: ${result.timestamps.length}${axesInfo}`);
+                                } else {
+                                    alert('No valid marker data found in CSV file.');
+                                }
+                            } catch (error) {
+                                console.error('CSV Import error:', error);
+                                alert('Failed to parse DaVinci Resolve CSV.');
+                            }
+                        } else {
+                            alert('Unsupported file type. Please use .json or .csv files.');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+            
+            const handleAddToComparison = (execution) => {
+                const testCase = testCases.find(tc => 
+                    tc.executions.some(ex => ex.id === execution.id)
+                );
+                
+                if (testCase && !comparisonSets.find(cs => cs.executionId === execution.id)) {
+                    setComparisonSets([...comparisonSets, {
+                        executionId: execution.id,
+                        testCaseName: testCase.name,
+                        executionName: execution.name,
+                        execution: execution,
+                        environment: testCase.environment
+                    }]);
+                }
+            };
+            
+            const exportToJSON = () => {
+                const data = {
+                    testCases,
+                    activeTestCase,
+                    activeExecution,
+                    comparisonSets,
+                    exportDate: new Date().toISOString(),
+                    version: '3.1'
+                };
+                
+                const jsonStr = JSON.stringify(data, null, 2);
+                const blob = new Blob([jsonStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `latency-test-${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+            
+            const exportToCSV = () => {
+                if (!currentExecution) {
+                    alert('No execution selected to export');
+                    return;
+                }
+                
+                // Create CSV header
+                let csv = 'Index,Time (s),Record In,Paired Time,Label,Axis,Stage,Note,Latency (ms),Status\n';
+                
+                // Add data rows
+                currentExecution.timestamps.forEach((ts, idx) => {
+                    const status = ts.excludeFromStats ? 'Excluded' : 
+                                  ts.isUnmatched ? 'Unmatched' : 'Valid';
+                    
+                    csv += `${idx + 1},`;
+                    csv += `${ts.time || ''},`;
+                    csv += `${ts.recordIn || ts.time || ''},`;
+                    csv += `${ts.pairedTime || ''},`;
+                    csv += `${ts.label},`;
+                    csv += `${ts.axis}${ts.direction || ''},`;
+                    csv += `${ts.stage || ''},`;
+                    csv += `"${(ts.note || '').replace(/"/g, '""')}",`;
+                    csv += `${ts.latencyMs || ''},`;
+                    csv += `${status}\n`;
+                });
+                
+                // Add statistics
+                const latencies = calculateLatencies(currentExecution.timestamps);
+                const stats = getStatistics(latencies);
+                const axisRanges = getTestedAxisRanges(currentExecution.timestamps);
+                
+                csv += '\n\nStatistics\n';
+                csv += `Minimum,${stats.min}ms\n`;
+                csv += `Average,${stats.avg.toFixed(2)}ms\n`;
+                csv += `Maximum,${stats.max}ms\n`;
+                csv += `Total Events,${currentExecution.timestamps.length}\n`;
+                
+                // Add axis range information
+                csv += '\nTested Axis Ranges\n';
+                Object.entries(axisRanges).forEach(([axis, data]) => {
+                    if (data.tested) {
+                        csv += `${axis} Axis,${data.range}\n`;
+                    }
+                });
+                
+                // Add per-axis statistics
+                const axiGroups = groupTimestampsByAxis(currentExecution.timestamps);
+                const axisKeys = Object.keys(axiGroups).filter(k => k !== 'No Axis');
+                
+                if (axisKeys.length > 0) {
+                    csv += '\nPer-Axis Statistics\n';
+                    csv += 'Axis,Events,Min (ms),Avg (ms),Max (ms),Pass Rate\n';
+                    
+                    axisKeys.forEach(axis => {
+                        const axisTimestamps = axiGroups[axis];
+                        const axisStats = getAxisStatistics(axisTimestamps, currentExecution.passCriteria);
+                        
+                        csv += `${axis},${axisTimestamps.length},`;
+                        csv += `${axisStats.min},${axisStats.avg.toFixed(2)},${axisStats.max},`;
+                        csv += `${axisStats.passRate.toFixed(1)}%\n`;
+                    });
+                }
+                
+                // Download CSV
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `latency-export-${Date.now()}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+            
+            const exportToPDF = () => {
+                if (!currentExecution) {
+                    alert('No execution selected to export');
+                    return;
+                }
+                
+                // Generate PDF content (simplified HTML for printing)
+                const pdfWindow = window.open('', '_blank');
+                const latencies = calculateLatencies(currentExecution.timestamps);
+                const stats = getStatistics(latencies);
+                const axisRanges = getTestedAxisRanges(currentExecution.timestamps);
+                const axiGroups = groupTimestampsByAxis(currentExecution.timestamps);
+                
+                const content = `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Latency Test Report</title>
+                        <style>
+                            body { font-family: Arial, sans-serif; margin: 20px; }
+                            h1 { color: #333; }
+                            table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+                            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                            th { background-color: #f2f2f2; }
+                            .stats { display: flex; gap: 20px; margin: 20px 0; }
+                            .stat-box { border: 1px solid #ddd; padding: 10px; border-radius: 5px; }
+                            .axis-range { background-color: #e3f2fd; padding: 5px 10px; border-radius: 3px; margin-right: 10px; display: inline-block; }
+                            @media print { .no-print { display: none; } }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>Latency Test Report</h1>
+                        <p>Generated: ${new Date().toLocaleString()}</p>
+                        <p>Test Case: ${currentTestCase?.name || 'Unknown'}</p>
+                        <p>Execution: ${currentExecution.name}</p>
+                        ${currentTestCase?.metadata?.abNumber ? `<p>AB Number: ${currentTestCase.metadata.abNumber}</p>` : ''}
+                        ${currentTestCase?.metadata?.tagVersion ? `<p>Tag Version: Tag${currentTestCase.metadata.tagVersion}</p>` : ''}
+                        
+                        <h2>Tested Axis Ranges</h2>
+                        <div>
+                            ${Object.entries(axisRanges).filter(([a, r]) => r.tested).map(([axis, data]) => 
+                                `<span class="axis-range">${data.range}</span>`
+                            ).join('') || 'No axis data available'}
+                        </div>
+                        
+                        <h2>Overall Statistics</h2>
+                        <div class="stats">
+                            <div class="stat-box">Min: ${formatMsToTime(stats.min)}</div>
+                            <div class="stat-box">Avg: ${formatMsToTime(stats.avg)}</div>
+                            <div class="stat-box">Max: ${formatMsToTime(stats.max)}</div>
+                            <div class="stat-box">Events: ${currentExecution.timestamps.length}</div>
+                        </div>
+                        
+                        <h2>Per-Axis Statistics</h2>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Axis</th>
+                                    <th>Events</th>
+                                    <th>Min</th>
+                                    <th>Avg</th>
+                                    <th>Max</th>
+                                    <th>Pass Rate</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${Object.keys(axiGroups).filter(k => k !== 'No Axis').map(axis => {
+                                    const axisTimestamps = axiGroups[axis];
+                                    const axisStats = getAxisStatistics(axisTimestamps, currentExecution.passCriteria);
+                                    return `
+                                        <tr>
+                                            <td>${axis}</td>
+                                            <td>${axisTimestamps.length}</td>
+                                            <td>${formatMsToTime(axisStats.min)}</td>
+                                            <td>${formatMsToTime(axisStats.avg)}</td>
+                                            <td>${formatMsToTime(axisStats.max)}</td>
+                                            <td>${axisStats.passRate.toFixed(1)}%</td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        
+                        <h2>Timestamps</h2>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Time</th>
+                                    <th>Label</th>
+                                    <th>Axis</th>
+                                    <th>Stage</th>
+                                    <th>Note</th>
+                                    <th>Latency</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${currentExecution.timestamps.map((ts, idx) => `
+                                    <tr>
+                                        <td>${idx + 1}</td>
+                                        <td>${ts.time}${ts.pairedTime ? ' → ' + ts.pairedTime : ''}</td>
+                                        <td>${ts.label}</td>
+                                        <td>${ts.axis}${ts.direction || ''}</td>
+                                        <td>${ts.stage || ''}</td>
+                                        <td>${ts.note || ''}</td>
+                                        <td>${ts.latency || ''}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                        
+                        <button class="no-print" onclick="window.print()">Print/Save as PDF</button>
+                    </body>
+                    </html>
+                `;
+                
+                pdfWindow.document.write(content);
+                pdfWindow.document.close();
+            };
+            
+            const handleExport = () => {
+                const exportType = prompt('Export format:\n1. JSON (full data)\n2. CSV (current execution)\n3. PDF (print report)\n\nEnter 1, 2, or 3:');
+                
+                switch(exportType) {
+                    case '1':
+                        exportToJSON();
+                        break;
+                    case '2':
+                        exportToCSV();
+                        break;
+                    case '3':
+                        exportToPDF();
+                        break;
+                    default:
+                        alert('Invalid selection');
+                }
+            };
+            
+            const manualSave = () => {
+                try {
+                    localStorage.setItem(STORAGE_KEYS.testCases, JSON.stringify(testCases));
+                    localStorage.setItem(STORAGE_KEYS.activeTestCase, activeTestCase || '');
+                    localStorage.setItem(STORAGE_KEYS.activeExecution, activeExecution || '');
+                    localStorage.setItem(STORAGE_KEYS.comparisonSets, JSON.stringify(comparisonSets));
+                    localStorage.setItem(STORAGE_KEYS.view, view);
+                    setLastSaved(new Date());
+                    alert('Data saved successfully!');
+                } catch (error) {
+                    console.error('Error saving:', error);
+                    alert('Failed to save data. Storage might be full.');
+                }
+            };
+            
+            const clearAllData = () => {
+                if (confirm('Are you sure you want to clear all test data? This action cannot be undone.')) {
+                    Object.values(STORAGE_KEYS).forEach(key => {
+                        localStorage.removeItem(key);
+                    });
+                    
+                    const defaultTestCase = createNewTestCase();
+                    setTestCases([defaultTestCase]);
+                    setActiveTestCase(defaultTestCase.id);
+                    setActiveExecution(defaultTestCase.executions[0].id);
+                    setComparisonSets([]);
+                    setView('execution');
+                    setSortConfig({ key: null, direction: 'asc' });
+                    setGroupByAxis(false);
+                    setShowPassFailHighlight(false);
+                    setLastSaved(null);
+                }
+            };
+            
+            // Current test case and execution
+            const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
+            const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
+            
+            // Render Functions
+            const renderExecutionView = () => {
+                if (!currentExecution) return <div className="text-center py-8 text-gray-500">No execution selected</div>;
+                
+                const latencies = calculateLatencies(currentExecution.timestamps);
+                const stats = getStatistics(latencies);
+                const passed = !currentExecution.passCriteria.enabled || stats.max <= currentExecution.passCriteria.maxLatency;
+                const excludedCount = currentExecution.timestamps.filter(ts => ts.excludeFromStats).length;
+                
+                const isDavinciImport = currentExecution.name && currentExecution.name.toLowerCase().endsWith('.csv');
+                const hasPairedMarkers = currentExecution.timestamps.some(ts => ts.pairedTime);
+                const hasUnmatched = currentExecution.timestamps.some(ts => ts.isUnmatched);
+                
+                // Apply sorting and grouping
+                let displayTimestamps = [...currentExecution.timestamps];
+                if (sortConfig.key) {
+                    displayTimestamps = sortTimestamps(displayTimestamps, sortConfig);
+                }
+                
+                return (
+                    <div className="space-y-6">
+                        {/* Test Specifications */}
+                        {currentTestCase && (
+                            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                                <h3 className="text-lg font-semibold mb-3">Test Specifications</h3>
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <span className="font-medium text-gray-600">Test Case:</span>
+                                        <span className="ml-2">{currentTestCase.name}</span>
+                                    </div>
+                                    {currentTestCase.metadata?.abNumber && (
+                                        <div>
+                                            <span className="font-medium text-gray-600">AB Number:</span>
+                                            <span className="ml-2">{currentTestCase.metadata.abNumber}</span>
+                                        </div>
+                                    )}
+                                    {currentTestCase.metadata?.descriptor && (
+                                        <div>
+                                            <span className="font-medium text-gray-600">Test Type:</span>
+                                            <span className="ml-2">{currentTestCase.metadata.descriptor}</span>
+                                        </div>
+                                    )}
+                                    {currentTestCase.metadata?.tagVersion && (
+                                        <div>
+                                            <span className="font-medium text-gray-600">Tag Version:</span>
+                                            <span className="ml-2">Tag{currentTestCase.metadata.tagVersion}</span>
+                                        </div>
+                                    )}
+                                    {currentTestCase.metadata?.axis && (
+                                        <div>
+                                            <span className="font-medium text-gray-600">Primary Axis:</span>
+                                            <span className="ml-2">{currentTestCase.metadata.axis}{currentTestCase.metadata.direction}</span>
+                                        </div>
+                                    )}
+                                    {currentExecution.passCriteria.enabled && (
+                                        <div>
+                                            <span className="font-medium text-gray-600">Pass Criteria:</span>
+                                            <span className="ml-2">Max {currentExecution.passCriteria.maxLatency}ms</span>
+                                        </div>
+                                    )}
+                                    <div>
+                                        <span className="font-medium text-gray-600">Execution:</span>
+                                        <span className="ml-2">{currentExecution.name}</span>
+                                    </div>
+                                    <div>
+                                        <span className="font-medium text-gray-600">Total Events:</span>
+                                        <span className="ml-2">{currentExecution.timestamps.length}</span>
+                                    </div>
+                                </div>
+                                
+                                {/* Tested Axis Ranges */}
+                                {(() => {
+                                    const axisRanges = getTestedAxisRanges(currentExecution.timestamps);
+                                    const testedAxes = Object.entries(axisRanges).filter(([axis, data]) => data.tested);
+                                    
+                                    if (testedAxes.length > 0) {
+                                        return (
+                                            <div className="mt-3 pt-3 border-t">
+                                                <div className="text-sm">
+                                                    <span className="font-medium text-gray-600">Tested Axis Ranges:</span>
+                                                    <div className="mt-1 flex gap-3">
+                                                        {testedAxes.map(([axis, data]) => (
+                                                            <span key={axis} className="px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs">
+                                                                {data.range}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+                                    return null;
+                                })()}
+                            </div>
+                        )}
+                        
+                        {/* Import Info Banner */}
+                        {isDavinciImport && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                <div className="flex items-center gap-2">
+                                    <Icon name="film" className="text-blue-600" />
+                                    <div className="flex-1">
+                                        <div className="text-sm font-medium text-blue-900">
+                                            DaVinci Resolve Import {hasPairedMarkers ? '(Paired Markers)' : ''}
+                                        </div>
+                                        <div className="text-xs text-blue-700">Source: {currentExecution.name}</div>
+                                    </div>
+                                    {hasUnmatched && (
+                                        <div className="text-xs text-orange-600 font-medium">
+                                            ⚠ Contains unmatched markers
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Statistics */}
+                        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                            <h3 className="text-lg font-semibold mb-3">
+                                Overall Statistics
+                                {excludedCount > 0 && (
+                                    <span className="ml-2 text-sm font-normal text-gray-500">
+                                        ({excludedCount} excluded from calculations)
+                                    </span>
+                                )}
+                            </h3>
+                            
+                            {/* Overall Stats */}
+                            <div className="grid grid-cols-5 gap-4 mb-4">
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-2xl font-bold text-blue-600">
+                                        {formatMsToTime(stats.min)}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">Minimum</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-2xl font-bold text-green-600">
+                                        {formatMsToTime(stats.avg)}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">Average</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-2xl font-bold text-orange-600">
+                                        {formatMsToTime(stats.max)}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">Maximum</div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className={`text-2xl font-bold ${passed ? 'text-green-600' : 'text-red-600'}`}>
+                                        {passed ? '✓' : '✗'}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                        {currentExecution.passCriteria.enabled ? 'Pass/Fail' : 'No Criteria'}
+                                    </div>
+                                </div>
+                                <div className="text-center p-3 bg-gray-50 rounded">
+                                    <div className="text-2xl font-bold text-gray-600">
+                                        {currentExecution.timestamps.length}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">Total Events</div>
+                                </div>
+                            </div>
+                            
+                            {/* Per-Axis Statistics */}
+                            {(() => {
+                                const axiGroups = groupTimestampsByAxis(currentExecution.timestamps);
+                                const axisKeys = Object.keys(axiGroups).filter(k => k !== 'No Axis');
+                                const axisRanges = getTestedAxisRanges(currentExecution.timestamps);
+                                
+                                if (axisKeys.length > 0) {
+                                    return (
+                                        <>
+                                            <h4 className="text-sm font-semibold text-gray-700 mb-2 border-t pt-3">
+                                                Per-Axis Breakdown
+                                                {Object.values(axisRanges).some(r => r.tested) && (
+                                                    <span className="ml-2 font-normal text-xs text-gray-500">
+                                                        (Coverage: {Object.entries(axisRanges)
+                                                            .filter(([a, r]) => r.tested)
+                                                            .map(([a, r]) => `${a}: ${r.positive && r.negative ? '±' : r.positive ? '+' : '-'}`)
+                                                            .join(', ')})
+                                                    </span>
+                                                )}
+                                            </h4>
+                                            <div className="space-y-2">
+                                                {axisKeys.map(axis => {
+                                                    const axisTimestamps = axiGroups[axis];
+                                                    const axisStats = getAxisStatistics(axisTimestamps, currentExecution.passCriteria);
+                                                    
+                                                    return (
+                                                        <div key={axis} className="flex items-center justify-between bg-gray-50 rounded px-3 py-2 text-sm">
+                                                            <div className="font-medium">
+                                                                {axis}
+                                                                <span className="ml-1 text-xs text-gray-500">
+                                                                    ({axisTimestamps.length} events)
+                                                                </span>
+                                                            </div>
+                                                            <div className="flex gap-4 text-xs">
+                                                                <span className="text-blue-600">Min: {formatMsToTime(axisStats.min)}</span>
+                                                                <span className="text-green-600">Avg: {formatMsToTime(axisStats.avg)}</span>
+                                                                <span className="text-orange-600">Max: {formatMsToTime(axisStats.max)}</span>
+                                                                {currentExecution.passCriteria.enabled && (
+                                                                    <span className="text-gray-700">
+                                                                        Pass: {axisStats.passRate.toFixed(1)}% ({axisStats.passed}/{axisStats.total})
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </>
+                                    );
+                                }
+                                return null;
+                            })()}
+                            </div>
+                            
+                            {stats.outliers.length > 0 && (
+                                <div className="mt-4 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                                    <div className="flex items-center gap-2 text-yellow-800">
+                                        <Icon name="alert-circle" />
+                                        <span className="font-medium">Outliers Detected:</span>
+                                    </div>
+                                    <div className="mt-2 text-sm text-yellow-700">
+                                        {stats.outliers.map((outlier, idx) => (
+                                            <div key={idx}>
+                                                {formatMsToTime(outlier.value)} ({outlier.from.label} → {outlier.to.label})
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        
+                        {/* Table Controls */}
+                        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-lg font-semibold">Timestamps</h3>
+                                <div className="flex gap-2">
+                                    <label className="flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-sm">
+                                        <input
+                                            type="checkbox"
+                                            checked={showPassFailHighlight}
+                                            onChange={(e) => setShowPassFailHighlight(e.target.checked)}
+                                        />
+                                        Highlight Pass/Fail
+                                    </label>
+                                    <button
+                                        onClick={() => handleAddToComparison(currentExecution)}
+                                        className="px-3 py-1.5 bg-blue-500 text-white rounded-md hover:bg-blue-600 flex items-center gap-1"
+                                    >
+                                        <Icon name="plus" />
+                                        Compare
+                                    </button>
+                                    <button
+                                        onClick={handleAddTimestamp}
+                                        className="px-3 py-1.5 bg-green-500 text-white rounded-md hover:bg-green-600 flex items-center gap-1"
+                                    >
+                                        <Icon name="plus" />
+                                        Add
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Timestamps Table - Always Grouped by Axis */}
+                                <div className="space-y-4">
+                                    {Object.entries(groupTimestampsByAxis(displayTimestamps)).map(([axis, timestamps]) => {
+                                        const axisStats = getAxisStatistics(timestamps, currentExecution.passCriteria);
+                                        const hasStats = axisStats.total > 0;
+                                        
+                                        // Determine axis coverage
+                                        let axisCoverage = '';
+                                        if (axis !== 'No Axis') {
+                                            const axisBase = axis.charAt(0);
+                                            const direction = axis.charAt(1);
+                                            axisCoverage = `${axisBase} axis ${direction} direction`;
+                                        }
+                                        
+                                        return (
+                                            <div key={axis} className="border rounded-lg overflow-hidden">
+                                                <div className="bg-gray-100 px-3 py-2">
+                                                    <div className="flex justify-between items-center">
+                                                        <div className="font-medium text-sm">
+                                                            <span className="text-base">{axis}</span>
+                                                            <span className="ml-2 text-xs text-gray-600">
+                                                                {axisCoverage && `(${axisCoverage})`}
+                                                            </span>
+                                                            <span className="ml-2 text-xs text-gray-700">
+                                                                {timestamps.length} events
+                                                            </span>
+                                                        </div>
+                                                        {hasStats && (
+                                                            <div className="flex gap-4 text-xs">
+                                                                <span className="text-blue-600">
+                                                                    Min: {formatMsToTime(axisStats.min)}
+                                                                </span>
+                                                                <span className="text-green-600">
+                                                                    Avg: {formatMsToTime(axisStats.avg)}
+                                                                </span>
+                                                                <span className="text-orange-600">
+                                                                    Max: {formatMsToTime(axisStats.max)}
+                                                                </span>
+                                                                {currentExecution.passCriteria.enabled && (
+                                                                    <>
+                                                                        <span className="border-l pl-4 text-gray-700">
+                                                                            Pass Rate: {axisStats.passRate.toFixed(1)}%
+                                                                        </span>
+                                                                        <span className="text-gray-600">
+                                                                            ({axisStats.passed}/{axisStats.total})
+                                                                        </span>
+                                                                    </>
+                                                                )}
+                                                                {axisStats.errors > 0 && (
+                                                                    <span className="text-red-600">
+                                                                        Errors: {axisStats.errors}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    {axisStats.outliers.length > 0 && (
+                                                        <div className="mt-2 text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded">
+                                                            ⚠ {axisStats.outliers.length} outlier(s) detected
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <table className="w-full">
+                                                    <thead>
+                                                        <tr className="border-b text-left bg-gray-50">
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">#</th>
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">Time</th>
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">Label</th>
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">Stage</th>
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">Note</th>
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">Latency</th>
+                                                            <th className="pb-2 px-2 text-xs font-medium text-gray-600">Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {timestamps.map((timestamp, idx) => {
+                                                            let latency = timestamp.latencyMs || null;
+                                                            let rowClass = '';
+                                                            let isOutlier = false;
+                                                            
+                                                            // Check if this is an outlier
+                                                            if (axisStats.outliers.find(o => o.id === timestamp.id)) {
+                                                                isOutlier = true;
+                                                            }
+                                                            
+                                                            if (showPassFailHighlight && currentExecution.passCriteria.enabled) {
+                                                                if (timestamp.isUnmatched || timestamp.label === 'Error' || timestamp.excludeFromStats) {
+                                                                    rowClass = 'row-error';
+                                                                } else if (latency && latency <= currentExecution.passCriteria.maxLatency) {
+                                                                    rowClass = 'row-pass';
+                                                                } else if (latency && latency > currentExecution.passCriteria.maxLatency) {
+                                                                    rowClass = 'row-fail';
+                                                                }
+                                                            }
+                                                            
+                                                            return (
+                                                                <tr key={timestamp.id} className={`border-b hover:bg-gray-50 ${rowClass}`}>
+                                                                    <td className="py-2 px-2 text-sm">
+                                                                        {idx + 1}
+                                                                        {isOutlier && (
+                                                                            <span className="ml-1 text-yellow-600" title="Outlier">⚠</span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="py-2 px-2">
+                                                                        <div className="flex flex-col">
+                                                                            <input
+                                                                                type="text"
+                                                                                value={timestamp.time}
+                                                                                onChange={(e) => handleTimestampChange(timestamp.id, 'time', e.target.value)}
+                                                                                placeholder="12.345"
+                                                                                className="w-full px-2 py-1 text-sm border rounded"
+                                                                                title={timestamp.calculationExplained || `Record In: ${timestamp.time}`}
+                                                                            />
+                                                                            {timestamp.pairedTime && (
+                                                                                <span className="text-xs text-gray-500 mt-1" title={timestamp.calculationExplained}>
+                                                                                    → {timestamp.pairedTime}
+                                                                                    {timestamp.calculationExplained && (
+                                                                                        <span className="ml-1 text-gray-400">
+                                                                                            ({timestamp.latency})
+                                                                                        </span>
+                                                                                    )}
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="py-2 px-2">
+                                                                        <select
+                                                                            value={timestamp.label}
+                                                                            onChange={(e) => handleTimestampChange(timestamp.id, 'label', e.target.value)}
+                                                                            className={`w-full px-2 py-1 text-sm border rounded ${
+                                                                                timestamp.label === 'Error' ? 'bg-red-50 border-red-300' : ''
+                                                                            }`}
+                                                                        >
+                                                                            <option value="TagOn">TagOn</option>
+                                                                            <option value="TagOff">TagOff</option>
+                                                                            <option value="Error">Error</option>
+                                                                        </select>
+                                                                    </td>
+                                                                    <td className="py-2 px-2">
+                                                                        <input
+                                                                            type="text"
+                                                                            value={timestamp.stage}
+                                                                            onChange={(e) => handleTimestampChange(timestamp.id, 'stage', e.target.value)}
+                                                                            placeholder="Run-#"
+                                                                            className="w-full px-2 py-1 text-sm border rounded"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="py-2 px-2">
+                                                                        <input
+                                                                            type="text"
+                                                                            value={timestamp.note}
+                                                                            onChange={(e) => handleTimestampChange(timestamp.id, 'note', e.target.value)}
+                                                                            placeholder="Note"
+                                                                            className="w-full px-2 py-1 text-sm border rounded text-xs"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="py-2 px-2 text-sm font-medium">
+                                                                        {timestamp.excludeFromStats && (
+                                                                            <span className="text-xs text-gray-400">(excluded) </span>
+                                                                        )}
+                                                                        {timestamp.latency || (latency !== null ? formatMsToTime(latency) : '-')}
+                                                                    </td>
+                                                                    <td className="py-2 px-2">
+                                                                        <button
+                                                                            onClick={() => handleDeleteTimestamp(timestamp.id)}
+                                                                            className="p-1 text-red-500 hover:bg-red-50 rounded"
+                                                                        >
+                                                                            <Icon name="trash-2" />
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            
+                            <div className="mt-4 text-xs text-gray-500">
+                                💡 Tips: 
+                                • Click column headers to sort
+                                • Group by axis shows statistics (min/avg/max) and pass rate
+                                • Marker colors:
+                                  - 🟡 Yellow = Identifier (AB#, test type, tag version, axis)
+                                  - 🔴 Red = Error zones (excluded from statistics)
+                                  - 🟢 Green = TagOn action → 🩷 Pink = Activation
+                                  - 🔵 Cyan = TagOff action → 🍋 Lemon = Activation
+                                • Action markers use format: "Tag[Action] #[Run]" (e.g., "TagOn #1")
+                                • Outliers marked with ⚠ symbol
+                                • Edit/delete works in both views
+                            </div>
+                        </div>
+                        
+                        {/* Pass/Fail Criteria */}
+                        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                            <h3 className="text-lg font-semibold mb-3">Pass/Fail Criteria</h3>
+                            <div className="flex items-center gap-4">
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={currentExecution.passCriteria.enabled}
+                                        onChange={(e) => {
+                                            const updatedTestCases = testCases.map(tc => {
+                                                if (tc.id === activeTestCase) {
+                                                    return {
+                                                        ...tc,
+                                                        executions: tc.executions.map(ex => {
+                                                            if (ex.id === activeExecution) {
+                                                                return {
+                                                                    ...ex,
+                                                                    passCriteria: { ...ex.passCriteria, enabled: e.target.checked }
+                                                                };
+                                                            }
+                                                            return ex;
+                                                        })
+                                                    };
+                                                }
+                                                return tc;
+                                            });
+                                            setTestCases(updatedTestCases);
+                                        }}
+                                        className="w-4 h-4"
+                                    />
+                                    <span className="text-sm">Enable Pass/Fail</span>
+                                </label>
+                                
+                                {currentExecution.passCriteria.enabled && (
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm">Max Latency:</span>
+                                        <input
+                                            type="number"
+                                            value={currentExecution.passCriteria.maxLatency}
+                                            onChange={(e) => {
+                                                const updatedTestCases = testCases.map(tc => {
+                                                    if (tc.id === activeTestCase) {
+                                                        return {
+                                                            ...tc,
+                                                            executions: tc.executions.map(ex => {
+                                                                if (ex.id === activeExecution) {
+                                                                    return {
+                                                                        ...ex,
+                                                                        passCriteria: { 
+                                                                            ...ex.passCriteria, 
+                                                                            maxLatency: parseFloat(e.target.value) 
+                                                                        }
+                                                                    };
+                                                                }
+                                                                return ex;
+                                                            })
+                                                        };
+                                                    }
+                                                    return tc;
+                                                });
+                                                setTestCases(updatedTestCases);
+                                            }}
+                                            className="w-24 px-2 py-1 text-sm border rounded"
+                                        />
+                                        <span className="text-sm">ms</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+            
+            // Main Render
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {!dataLoaded ? (
+                        <div className="flex items-center justify-center h-screen">
+                            <div className="text-center">
+                                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+                                <p className="mt-4 text-gray-600">Loading test data...</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            {/* Header */}
+                            <div className="bg-white border-b border-gray-200 px-6 py-4 no-print">
+                                <div className="flex justify-between items-center">
+                                    <div className="flex items-center gap-4">
+                                        <h1 className="text-2xl font-bold text-gray-900">Hardware Latency Tester v3.1</h1>
+                                        <div className="flex items-center gap-2 text-sm">
+                                            {autoSave ? (
+                                                <div className="flex items-center gap-1 text-green-600">
+                                                    <Icon name="cloud" />
+                                                    <span>Auto-save ON</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-1 text-gray-500">
+                                                    <Icon name="hard-drive" />
+                                                    <span>Auto-save OFF</span>
+                                                </div>
+                                            )}
+                                            {lastSaved && (
+                                                <span className="text-gray-500 text-xs">
+                                                    Last saved: {lastSaved.toLocaleTimeString()}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setAutoSave(!autoSave)}
+                                            className={`px-3 py-2 rounded-md flex items-center gap-2 ${
+                                                autoSave 
+                                                    ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                            }`}
+                                        >
+                                            <Icon name={autoSave ? 'cloud' : 'hard-drive'} />
+                                            Auto-save
+                                        </button>
+                                        {!autoSave && (
+                                            <button
+                                                onClick={manualSave}
+                                                className="px-3 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 flex items-center gap-2"
+                                            >
+                                                <Icon name="save" />
+                                                Save
+                                            </button>
+                                        )}
+                                        <button
+                                            onClick={clearAllData}
+                                            className="px-3 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200 flex items-center gap-2"
+                                        >
+                                            <Icon name="trash-2" />
+                                            Clear
+                                        </button>
+                                        <div className="border-l border-gray-300 mx-2"></div>
+                                        <button
+                                            onClick={() => importRef.current?.click()}
+                                            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 flex items-center gap-2"
+                                            title="Import JSON or DaVinci Resolve CSV"
+                                        >
+                                            <Icon name="upload" />
+                                            Import
+                                        </button>
+                                        <button
+                                            onClick={handleExport}
+                                            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 flex items-center gap-2"
+                                        >
+                                            <Icon name="download" />
+                                            Export
+                                        </button>
+                                        <input
+                                            ref={importRef}
+                                            type="file"
+                                            accept=".json,.csv"
+                                            onChange={handleFileImport}
+                                            className="hidden"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Navigation Tabs */}
+                            <div className="bg-white border-b border-gray-200 px-6 no-print">
+                                <div className="flex gap-6">
+                                    <button
+                                        onClick={() => setView('execution')}
+                                        className={`py-3 border-b-2 ${
+                                            view === 'execution' 
+                                                ? 'border-blue-500 text-blue-600' 
+                                                : 'border-transparent text-gray-600'
+                                        }`}
+                                    >
+                                        Test Execution
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Content */}
+                            <div className="flex">
+                                {/* Sidebar */}
+                                <div className="w-64 bg-white border-r border-gray-200 min-h-screen p-4 no-print">
+                                    <div className="mb-4">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <h3 className="font-semibold text-gray-700">Test Cases</h3>
+                                            <button
+                                                onClick={() => {
+                                                    const newTestCase = createNewTestCase();
+                                                    setTestCases([...testCases, newTestCase]);
+                                                    setActiveTestCase(newTestCase.id);
+                                                    setActiveExecution(newTestCase.executions[0].id);
+                                                }}
+                                                className="p-1 hover:bg-gray-100 rounded"
+                                            >
+                                                <Icon name="plus" />
+                                            </button>
+                                        </div>
+                                        
+                                        <div className="space-y-2">
+                                            {testCases.map(tc => (
+                                                <div key={tc.id} className="border rounded-md">
+                                                    <button
+                                                        onClick={() => {
+                                                            setActiveTestCase(tc.id);
+                                                            if (tc.executions.length > 0) {
+                                                                setActiveExecution(tc.executions[0].id);
+                                                            }
+                                                        }}
+                                                        className={`w-full text-left p-2 hover:bg-gray-50 ${
+                                                            activeTestCase === tc.id ? 'bg-blue-50' : ''
+                                                        }`}
+                                                    >
+                                                        <div className="text-sm font-medium">{tc.name}</div>
+                                                        {tc.metadata?.abNumber && (
+                                                            <div className="text-xs text-gray-500">
+                                                                {tc.metadata.abNumber} - {tc.metadata.descriptor}
+                                                            </div>
+                                                        )}
+                                                        <div className="text-xs text-gray-500">{tc.executions.length} executions</div>
+                                                    </button>
+                                                    
+                                                    {activeTestCase === tc.id && (
+                                                        <div className="border-t">
+                                                            <div className="px-2 py-1 bg-gray-50 text-xs font-medium text-gray-600">
+                                                                Executions
+                                                            </div>
+                                                            {tc.executions.map(ex => (
+                                                                <button
+                                                                    key={ex.id}
+                                                                    onClick={() => setActiveExecution(ex.id)}
+                                                                    className={`w-full text-left px-4 py-1.5 text-sm hover:bg-gray-100 ${
+                                                                        activeExecution === ex.id ? 'bg-blue-100' : ''
+                                                                    }`}
+                                                                >
+                                                                    {ex.name}
+                                                                </button>
+                                                            ))}
+                                                            <button
+                                                                onClick={() => {
+                                                                    const newExecution = createNewExecution();
+                                                                    const updatedTestCases = testCases.map(testCase => {
+                                                                        if (testCase.id === tc.id) {
+                                                                            return {
+                                                                                ...testCase,
+                                                                                executions: [...testCase.executions, newExecution]
+                                                                            };
+                                                                        }
+                                                                        return testCase;
+                                                                    });
+                                                                    setTestCases(updatedTestCases);
+                                                                    setActiveExecution(newExecution.id);
+                                                                }}
+                                                                className="w-full text-left px-4 py-1.5 text-sm hover:bg-gray-100 text-blue-600 flex items-center gap-1"
+                                                            >
+                                                                <Icon name="plus" className="w-3 h-3" />
+                                                                New Execution
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                {/* Main Content */}
+                                <div className="flex-1 p-6">
+                                    {view === 'execution' && renderExecutionView()}
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+            );
+        };
+        
+        // Render the app
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<LatencyTester />);
+    </script>
+</body>
+</html>
