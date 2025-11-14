@@ -1,6 +1,52 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, Upload, Plus, Trash2, Copy, Check, X, AlertCircle, FileText, BarChart3, Settings, Save, FolderOpen, Eye, EyeOff, ChevronDown, ChevronUp, HardDrive, Cloud } from 'lucide-react';
 
+const DEFAULT_ENVIRONMENT = {
+  modelSKU: '',
+  abVersion: '',
+  tagVersion: '',
+  fwVersion: '',
+  assetPackVersion: '',
+  payloadVersion: '',
+  links: []
+};
+
+const DEFAULT_HARDWARE = {
+  headset: '',
+  controllers: '',
+  tracking: '',
+  compute: '',
+  accessories: ''
+};
+
+const DEFAULT_REQUIREMENTS = {
+  enabled: false,
+  maxLatency: 100,
+  axisRanges: {
+    X: { min: '', max: '' },
+    Y: { min: '', max: '' },
+    Z: { min: '', max: '' }
+  },
+  notes: ''
+};
+
+const DEFAULT_PASS_CRITERIA = {
+  enabled: false,
+  maxLatency: 100
+};
+
+const DEFAULT_TIMESTAMP = {
+  time: '',
+  label: 'TagOff',
+  note: '',
+  stage: '',
+  axis: '',
+  direction: ''
+};
+
+const AXIS_OPTIONS = ['', 'X', 'Y', 'Z'];
+const DIRECTION_OPTIONS = ['', '+', '-'];
+
 const LatencyTester = () => {
   // State Management with localStorage persistence
   const [testCases, setTestCases] = useState([]);
@@ -62,7 +108,7 @@ const LatencyTester = () => {
         const savedAutoSave = localStorage.getItem(STORAGE_KEYS.autoSave);
 
         if (savedTestCases) {
-          const parsedTestCases = JSON.parse(savedTestCases);
+          const parsedTestCases = JSON.parse(savedTestCases).map(normalizeTestCase);
           setTestCases(parsedTestCases);
           
           if (savedActiveTestCase) {
@@ -135,21 +181,15 @@ const LatencyTester = () => {
   // Helper Functions
   function createNewTestCase() {
     const id = Date.now().toString();
-    return {
+    return normalizeTestCase({
       id,
       name: `Test Case ${new Date().toLocaleString()}`,
-      environment: {
-        modelSKU: '',
-        abVersion: '',
-        tagVersion: '',
-        fwVersion: '',
-        assetPackVersion: '',
-        payloadVersion: '',
-        links: []
-      },
+      environment: { ...DEFAULT_ENVIRONMENT },
+      hardware: { ...DEFAULT_HARDWARE },
+      requirements: { ...DEFAULT_REQUIREMENTS },
       executions: [createNewExecution()],
       createdAt: new Date().toISOString()
-    };
+    });
   }
 
   function createNewExecution() {
@@ -159,7 +199,7 @@ const LatencyTester = () => {
       tagNumbers: [],
       tagIds: [],
       timestamps: [],
-      passCriteria: { enabled: false, maxLatency: 100 },
+      passCriteria: { ...DEFAULT_PASS_CRITERIA },
       notes: ''
     };
   }
@@ -167,10 +207,75 @@ const LatencyTester = () => {
   function createNewTimestamp() {
     return {
       id: Date.now().toString() + Math.random(),
-      time: '',
-      label: 'TagOff',
-      note: '',
-      stage: ''
+      ...DEFAULT_TIMESTAMP
+    };
+  }
+
+  function normalizeTimestamp(timestamp = {}) {
+    const label = timestamp.label || DEFAULT_TIMESTAMP.label;
+    return {
+      ...DEFAULT_TIMESTAMP,
+      ...timestamp,
+      label,
+      axis: (timestamp.axis || '').toUpperCase().replace(/[^XYZ]/g, '').slice(0, 1),
+      direction: (timestamp.direction === '+' || timestamp.direction === '-') ? timestamp.direction : ''
+    };
+  }
+
+  function normalizeExecution(execution = {}) {
+    const normalizedTimestamps = (execution.timestamps || []).map(normalizeTimestamp);
+    return {
+      id: execution.id || Date.now().toString() + Math.random(),
+      name: execution.name || `Execution ${new Date().toLocaleTimeString()}`,
+      tagNumbers: execution.tagNumbers || [],
+      tagIds: execution.tagIds || [],
+      timestamps: normalizedTimestamps,
+      passCriteria: {
+        ...DEFAULT_PASS_CRITERIA,
+        ...(execution.passCriteria || {})
+      },
+      notes: execution.notes || ''
+    };
+  }
+
+  function normalizeTestCase(testCase = {}) {
+    const normalizedExecutions = (testCase.executions && testCase.executions.length > 0)
+      ? testCase.executions.map(normalizeExecution)
+      : [createNewExecution()];
+
+    const mergedRequirements = {
+      ...DEFAULT_REQUIREMENTS,
+      ...(testCase.requirements || {})
+    };
+
+    const normalizedAxisRanges = ['X', 'Y', 'Z'].reduce((acc, axis) => {
+      const sourceRange = mergedRequirements.axisRanges?.[axis] || {};
+      return {
+        ...acc,
+        [axis]: {
+          min: sourceRange.min !== undefined ? sourceRange.min : DEFAULT_REQUIREMENTS.axisRanges[axis].min,
+          max: sourceRange.max !== undefined ? sourceRange.max : DEFAULT_REQUIREMENTS.axisRanges[axis].max
+        }
+      };
+    }, {});
+
+    return {
+      id: testCase.id || Date.now().toString(),
+      name: testCase.name || `Test Case ${new Date().toLocaleString()}`,
+      environment: {
+        ...DEFAULT_ENVIRONMENT,
+        ...(testCase.environment || {})
+      },
+      hardware: {
+        ...DEFAULT_HARDWARE,
+        ...(testCase.hardware || {})
+      },
+      requirements: {
+        ...mergedRequirements,
+        axisRanges: normalizedAxisRanges
+      },
+      executions: normalizedExecutions,
+      createdAt: testCase.createdAt || new Date().toISOString()
     };
   }
 
@@ -207,7 +312,9 @@ const LatencyTester = () => {
         latencies.push({
           value: currTime - prevTime,
           from: sortedTimestamps[i - 1],
-          to: sortedTimestamps[i]
+          to: sortedTimestamps[i],
+          axis: sortedTimestamps[i].axis || '',
+          direction: sortedTimestamps[i].direction || ''
         });
       }
     }
@@ -217,7 +324,7 @@ const LatencyTester = () => {
 
   function getStatistics(latencies) {
     if (latencies.length === 0) return { min: 0, max: 0, avg: 0, outliers: [] };
-    
+
     const values = latencies.map(l => l.value);
     const sorted = [...values].sort((a, b) => a - b);
     const min = sorted[0];
@@ -234,8 +341,64 @@ const LatencyTester = () => {
     const outliers = latencies.filter(l => 
       l.value < lowerBound || l.value > upperBound
     );
-    
+
     return { min, max, avg, outliers };
+  }
+
+  function getActiveRequirements(testCase, execution) {
+    if (testCase?.requirements?.enabled) {
+      return testCase.requirements;
+    }
+
+    if (execution?.passCriteria?.enabled) {
+      return execution.passCriteria;
+    }
+
+    return { enabled: false };
+  }
+
+  function formatAxisKey(axis, direction) {
+    if (!axis) return 'No Axis';
+    return `${axis}${direction || ''}`;
+  }
+
+  function humanizeLabel(key) {
+    if (!key) return '';
+    return key
+      .replace(/([A-Z])/g, ' $1')
+      .replace(/^./, char => char.toUpperCase())
+      .trim();
+  }
+
+  function getAxisSummary(latencies, requirements) {
+    const axisGroups = {};
+
+    latencies.forEach(latency => {
+      const axisKey = formatAxisKey(latency.axis, latency.direction);
+      if (!axisGroups[axisKey]) {
+        axisGroups[axisKey] = [];
+      }
+      axisGroups[axisKey].push(latency);
+    });
+
+    const summary = {};
+    Object.entries(axisGroups).forEach(([axisKey, items]) => {
+      const stats = getStatistics(items);
+      let passRate = null;
+
+      if (requirements?.enabled && typeof requirements.maxLatency === 'number' && !Number.isNaN(requirements.maxLatency)) {
+        const passes = items.filter(item => item.value <= requirements.maxLatency).length;
+        passRate = items.length > 0 ? (passes / items.length) * 100 : null;
+      }
+
+      summary[axisKey] = {
+        stats,
+        count: items.length,
+        passRate
+      };
+    });
+
+    return summary;
   }
 
   // Current test case and execution helpers
@@ -275,7 +438,14 @@ const LatencyTester = () => {
                 ...ex,
                 timestamps: ex.timestamps.map(ts => {
                   if (ts.id === timestampId) {
-                    return { ...ts, [field]: value };
+                    let nextValue = value;
+                    if (field === 'axis') {
+                      nextValue = value.toUpperCase().replace(/[^XYZ]/g, '').slice(0, 1);
+                    }
+                    if (field === 'direction') {
+                      nextValue = value === '+' || value === '-' ? value : '';
+                    }
+                    return { ...ts, [field]: nextValue };
                   }
                   return ts;
                 })
@@ -319,12 +489,18 @@ const LatencyTester = () => {
       e.preventDefault();
       const newTimestamps = lines.map(line => {
         const parts = line.split('\t');
+        const [time = '', label = 'TagOff', note = '', stage = '', axis = '', direction = ''] = parts;
+        const normalized = normalizeTimestamp({
+          time: time.trim(),
+          label: label || 'TagOff',
+          note: note.trim(),
+          stage: stage.trim(),
+          axis: axis.trim(),
+          direction: direction.trim()
+        });
         return {
           id: Date.now().toString() + Math.random(),
-          time: parts[0] || '',
-          label: parts[1] || 'TagOff',
-          note: parts[2] || '',
-          stage: parts[3] || ''
+          ...normalized
         };
       });
       
@@ -360,7 +536,9 @@ const LatencyTester = () => {
         testCaseName: testCase.name,
         executionName: execution.name,
         execution: execution,
-        environment: testCase.environment
+        environment: testCase.environment,
+        hardware: testCase.hardware,
+        requirements: testCase.requirements
       }]);
     }
   };
@@ -400,11 +578,14 @@ const LatencyTester = () => {
 
   // Export with localStorage backup
   const exportToExcel = () => {
+    const currentLatencies = calculateLatencies(currentExecution?.timestamps || []);
     const data = {
       testCase: currentTestCase,
       execution: currentExecution,
-      latencies: calculateLatencies(currentExecution?.timestamps || []),
-      statistics: getStatistics(calculateLatencies(currentExecution?.timestamps || []))
+      hardware: currentTestCase?.hardware,
+      requirements: currentTestCase?.requirements,
+      latencies: currentLatencies,
+      statistics: getStatistics(currentLatencies)
     };
     
     const jsonStr = JSON.stringify(data, null, 2);
@@ -425,10 +606,13 @@ const LatencyTester = () => {
         try {
           const data = JSON.parse(event.target.result);
           if (data.testCase) {
-            setTestCases([...testCases, data.testCase]);
-            setActiveTestCase(data.testCase.id);
+            const importedTestCase = normalizeTestCase(data.testCase);
+            setTestCases([...testCases, importedTestCase]);
+            setActiveTestCase(importedTestCase.id);
             if (data.execution) {
               setActiveExecution(data.execution.id);
+            } else if (importedTestCase.executions.length > 0) {
+              setActiveExecution(importedTestCase.executions[0].id);
             }
           }
         } catch (error) {
@@ -450,8 +634,21 @@ const LatencyTester = () => {
     
     const latencies = calculateLatencies(currentExecution.timestamps);
     const stats = getStatistics(latencies);
-    const passed = !currentExecution.passCriteria.enabled || 
-                   stats.max <= currentExecution.passCriteria.maxLatency;
+    const activeRequirements = getActiveRequirements(currentTestCase, currentExecution);
+    const hasRequirements = activeRequirements?.enabled && typeof activeRequirements.maxLatency === 'number' && !Number.isNaN(activeRequirements.maxLatency);
+    const passed = hasRequirements ? stats.max <= activeRequirements.maxLatency : true;
+    const requirementSource = currentTestCase?.requirements?.enabled
+      ? 'Test Case'
+      : currentExecution.passCriteria.enabled
+        ? 'Execution'
+        : 'None';
+    const executionCriteriaLocked = currentTestCase?.requirements?.enabled;
+    const axisSummary = getAxisSummary(latencies, activeRequirements);
+    const axisKeys = Object.keys(axisSummary);
+    const hardwareEntries = Object.entries(currentTestCase?.hardware || {}).filter(([, value]) => value);
+    const axisRangeEntries = activeRequirements?.axisRanges
+      ? Object.entries(activeRequirements.axisRanges).filter(([, range]) => range.min !== '' || range.max !== '')
+      : [];
 
     return (
       <div className="space-y-6">
@@ -489,6 +686,65 @@ const LatencyTester = () => {
           </div>
         </div>
 
+        {/* Hardware and Requirements */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <h3 className="text-lg font-semibold mb-3">Hardware & Requirements</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Hardware</div>
+              {hardwareEntries.length === 0 ? (
+                <p className="text-gray-500">No hardware has been assigned to this test case.</p>
+              ) : (
+                <div className="space-y-1">
+                  {hardwareEntries.map(([key, value]) => (
+                    <div key={key} className="flex justify-between gap-2">
+                      <span className="text-gray-500">{humanizeLabel(key)}:</span>
+                      <span className="font-medium text-gray-900 text-right flex-1">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Requirements</div>
+              <div className="space-y-2">
+                <div className="flex justify-between gap-2">
+                  <span className="text-gray-500">Source:</span>
+                  <span className="font-medium text-gray-900 text-right flex-1">{requirementSource}</span>
+                </div>
+                {hasRequirements ? (
+                  <>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-gray-500">Max Latency:</span>
+                      <span className="font-medium text-gray-900 text-right flex-1">{activeRequirements.maxLatency} ms</span>
+                    </div>
+                    {axisRangeEntries.length > 0 && (
+                      <div>
+                        <div className="text-gray-500">Axis Ranges:</div>
+                        <div className="mt-1 space-y-1">
+                          {axisRangeEntries.map(([axis, range]) => (
+                            <div key={axis} className="flex justify-between gap-2 text-xs">
+                              <span className="text-gray-500">{axis} Axis</span>
+                              <span className="font-medium text-gray-900 text-right flex-1">
+                                {range.min !== '' ? range.min : '—'} - {range.max !== '' ? range.max : '—'} mm
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {activeRequirements.notes && (
+                      <div className="text-xs text-gray-600">{activeRequirements.notes}</div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-gray-500">No requirements enabled for this execution.</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Statistics */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <h3 className="text-lg font-semibold mb-3">Statistics</h3>
@@ -512,11 +768,15 @@ const LatencyTester = () => {
               <div className="text-xs text-gray-500 mt-1">Maximum</div>
             </div>
             <div className="text-center p-3 bg-gray-50 rounded">
-              <div className={`text-2xl font-bold ${passed ? 'text-green-600' : 'text-red-600'}`}>
-                {passed ? <Check className="w-8 h-8 mx-auto" /> : <X className="w-8 h-8 mx-auto" />}
+              <div className={`text-2xl font-bold ${hasRequirements ? (passed ? 'text-green-600' : 'text-red-600') : 'text-gray-400'}`}>
+                {hasRequirements ? (
+                  passed ? <Check className="w-8 h-8 mx-auto" /> : <X className="w-8 h-8 mx-auto" />
+                ) : (
+                  <span>-</span>
+                )}
               </div>
               <div className="text-xs text-gray-500 mt-1">
-                {currentExecution.passCriteria.enabled ? 'Pass/Fail' : 'No Criteria'}
+                {hasRequirements ? `Pass/Fail (${requirementSource})` : 'No Criteria'}
               </div>
             </div>
           </div>
@@ -535,6 +795,46 @@ const LatencyTester = () => {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Axis Performance */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <h3 className="text-lg font-semibold mb-3">Axis Performance</h3>
+          {axisKeys.length === 0 ? (
+            <p className="text-sm text-gray-500">No axis information recorded for this execution.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="pb-2 px-2 font-medium text-gray-600">Axis</th>
+                    <th className="pb-2 px-2 font-medium text-gray-600">Events</th>
+                    <th className="pb-2 px-2 font-medium text-gray-600">Min</th>
+                    <th className="pb-2 px-2 font-medium text-gray-600">Avg</th>
+                    <th className="pb-2 px-2 font-medium text-gray-600">Max</th>
+                    <th className="pb-2 px-2 font-medium text-gray-600">Pass Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {axisKeys.map(axisKey => {
+                    const data = axisSummary[axisKey];
+                    return (
+                      <tr key={axisKey} className="border-b hover:bg-gray-50">
+                        <td className="py-2 px-2 font-medium text-gray-900">{axisKey}</td>
+                        <td className="py-2 px-2 text-gray-700">{data.count}</td>
+                        <td className="py-2 px-2 text-blue-600 font-medium">{formatMsToTime(data.stats.min)}</td>
+                        <td className="py-2 px-2 text-green-600 font-medium">{formatMsToTime(data.stats.avg)}</td>
+                        <td className="py-2 px-2 text-orange-600 font-medium">{formatMsToTime(data.stats.max)}</td>
+                        <td className="py-2 px-2 text-gray-700">
+                          {data.passRate !== null ? `${data.passRate.toFixed(1)}%` : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -559,6 +859,8 @@ const LatencyTester = () => {
                   <th className="pb-2 px-2 text-sm font-medium text-gray-600">#</th>
                   <th className="pb-2 px-2 text-sm font-medium text-gray-600">Time (s.ms)</th>
                   <th className="pb-2 px-2 text-sm font-medium text-gray-600">Label</th>
+                  <th className="pb-2 px-2 text-sm font-medium text-gray-600">Axis</th>
+                  <th className="pb-2 px-2 text-sm font-medium text-gray-600">Dir</th>
                   <th className="pb-2 px-2 text-sm font-medium text-gray-600">Stage</th>
                   <th className="pb-2 px-2 text-sm font-medium text-gray-600">Note</th>
                   <th className="pb-2 px-2 text-sm font-medium text-gray-600">Latency</th>
@@ -598,6 +900,28 @@ const LatencyTester = () => {
                           <option value="TagOn">TagOn</option>
                           <option value="TagOff">TagOff</option>
                           <option value="Error">Error</option>
+                        </select>
+                      </td>
+                      <td className="py-2 px-2">
+                        <select
+                          value={timestamp.axis}
+                          onChange={(e) => handleTimestampChange(timestamp.id, 'axis', e.target.value)}
+                          className="w-full px-2 py-1 text-sm border rounded"
+                        >
+                          {AXIS_OPTIONS.map(option => (
+                            <option key={option} value={option}>{option === '' ? '—' : option}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2 px-2">
+                        <select
+                          value={timestamp.direction}
+                          onChange={(e) => handleTimestampChange(timestamp.id, 'direction', e.target.value)}
+                          className="w-full px-2 py-1 text-sm border rounded"
+                        >
+                          {DIRECTION_OPTIONS.map(option => (
+                            <option key={option || 'none'} value={option}>{option === '' ? '—' : option}</option>
+                          ))}
                         </select>
                       </td>
                       <td className="py-2 px-2">
@@ -649,7 +973,9 @@ const LatencyTester = () => {
               <input
                 type="checkbox"
                 checked={currentExecution.passCriteria.enabled}
+                disabled={executionCriteriaLocked}
                 onChange={(e) => {
+                  if (executionCriteriaLocked) return;
                   const updatedTestCases = testCases.map(tc => {
                     if (tc.id === activeTestCase) {
                       return {
@@ -673,14 +999,16 @@ const LatencyTester = () => {
               />
               <span className="text-sm">Enable Pass/Fail</span>
             </label>
-            
+
             {currentExecution.passCriteria.enabled && (
               <div className="flex items-center gap-2">
                 <span className="text-sm">Max Latency:</span>
                 <input
                   type="number"
                   value={currentExecution.passCriteria.maxLatency}
+                  disabled={executionCriteriaLocked}
                   onChange={(e) => {
+                    if (executionCriteriaLocked) return;
                     const updatedTestCases = testCases.map(tc => {
                       if (tc.id === activeTestCase) {
                         return {
@@ -706,7 +1034,11 @@ const LatencyTester = () => {
               </div>
             )}
           </div>
+          {executionCriteriaLocked && (
+            <p className="mt-3 text-xs text-blue-600">Test case level requirements are enabled. Execution overrides are locked.</p>
+          )}
         </div>
+        
       </div>
     );
   };
@@ -737,6 +1069,7 @@ const LatencyTester = () => {
                         <th className="text-center pb-2 text-sm font-medium text-gray-600">Avg</th>
                         <th className="text-center pb-2 text-sm font-medium text-gray-600">Max</th>
                         <th className="text-center pb-2 text-sm font-medium text-gray-600">Outliers</th>
+                        <th className="text-center pb-2 text-sm font-medium text-gray-600">Requirement</th>
                         <th className="text-center pb-2 text-sm font-medium text-gray-600">Actions</th>
                       </tr>
                     </thead>
@@ -744,6 +1077,12 @@ const LatencyTester = () => {
                       {comparisonSets.map((set, index) => {
                         const latencies = calculateLatencies(set.execution.timestamps);
                         const stats = getStatistics(latencies);
+                        const requirement = getActiveRequirements({ requirements: set.requirements }, set.execution);
+                        const requirementSource = set.requirements?.enabled
+                          ? 'Test Case'
+                          : set.execution.passCriteria?.enabled
+                            ? 'Execution'
+                            : 'None';
                         
                         return (
                           <tr key={set.executionId} className="border-b hover:bg-gray-50">
@@ -766,6 +1105,16 @@ const LatencyTester = () => {
                               ) : (
                                 <span className="text-gray-400">0</span>
                               )}
+                            </td>
+                            <td className="py-2 text-center text-sm">
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="font-medium text-gray-700">{requirementSource}</span>
+                                <span className="text-xs text-gray-500">
+                                  {requirement?.enabled && typeof requirement.maxLatency === 'number' && !Number.isNaN(requirement.maxLatency)
+                                    ? `${requirement.maxLatency} ms`
+                                    : 'No limit'}
+                                </span>
+                              </div>
                             </td>
                             <td className="py-2 text-center">
                               <button
@@ -832,6 +1181,94 @@ const LatencyTester = () => {
                   </div>
                 </div>
               )}
+
+              {(() => {
+                const summaries = comparisonSets.map(set => {
+                  const latencies = calculateLatencies(set.execution.timestamps);
+                  const requirements = getActiveRequirements({ requirements: set.requirements }, set.execution);
+                  return {
+                    set,
+                    summary: getAxisSummary(latencies, requirements),
+                    requirements
+                  };
+                });
+
+                const uniqueAxisKeys = Array.from(new Set(
+                  summaries.flatMap(item => Object.keys(item.summary))
+                ));
+
+                return (
+                  <div className="mt-6">
+                    <h3 className="text-lg font-medium mb-3">Axis Comparison</h3>
+                    {uniqueAxisKeys.length === 0 ? (
+                      <p className="text-sm text-gray-500">No axis metadata available across the compared executions.</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr>
+                              <th className="px-2 py-2 text-left border-b text-gray-600">Axis</th>
+                              {summaries.map(item => (
+                                <th
+                                  key={item.set.executionId}
+                                  colSpan={4}
+                                  className="px-2 py-2 text-center border-b text-gray-600"
+                                >
+                                  {item.set.executionName}
+                                </th>
+                              ))}
+                            </tr>
+                            <tr>
+                              <th className="px-2 py-2 text-left border-b"></th>
+                              {summaries.map(item => (
+                                <React.Fragment key={`${item.set.executionId}-metrics`}>
+                                  <th className="px-2 py-2 text-xs text-gray-500 border-b text-right">Min</th>
+                                  <th className="px-2 py-2 text-xs text-gray-500 border-b text-right">Avg</th>
+                                  <th className="px-2 py-2 text-xs text-gray-500 border-b text-right">Max</th>
+                                  <th className="px-2 py-2 text-xs text-gray-500 border-b text-right">Pass Rate</th>
+                                </React.Fragment>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {uniqueAxisKeys.map(axisKey => (
+                              <tr key={axisKey} className="border-b hover:bg-gray-50">
+                                <td className="px-2 py-2 font-medium text-gray-900">{axisKey}</td>
+                                {summaries.map(item => {
+                                  const data = item.summary[axisKey];
+                                  return (
+                                    <React.Fragment key={`${item.set.executionId}-${axisKey}`}>
+                                      <td className="px-2 py-2 text-right text-blue-600 font-medium">
+                                        {data ? formatMsToTime(data.stats.min) : '—'}
+                                      </td>
+                                      <td className="px-2 py-2 text-right text-green-600 font-medium">
+                                        {data ? formatMsToTime(data.stats.avg) : '—'}
+                                      </td>
+                                      <td className="px-2 py-2 text-right text-orange-600 font-medium">
+                                        {data ? formatMsToTime(data.stats.max) : '—'}
+                                      </td>
+                                      <td className="px-2 py-2 text-right text-gray-700">
+                                        {data ? (
+                                          <div className="flex flex-col items-end">
+                                            <span>{data.passRate !== null ? `${data.passRate.toFixed(1)}%` : '—'}</span>
+                                            <span className="text-xs text-gray-400">{data.count} events</span>
+                                          </div>
+                                        ) : (
+                                          '—'
+                                        )}
+                                      </td>
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -1039,11 +1476,265 @@ const LatencyTester = () => {
                 Add Link
               </button>
             </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <h2 className="text-xl font-semibold mb-4">Hardware Assignment</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Headset</label>
+            <input
+              type="text"
+              value={currentTestCase.hardware.headset}
+              onChange={(e) => {
+                const updatedTestCases = testCases.map(tc => {
+                  if (tc.id === activeTestCase) {
+                    return {
+                      ...tc,
+                      hardware: { ...tc.hardware, headset: e.target.value }
+                    };
+                  }
+                  return tc;
+                });
+                setTestCases(updatedTestCases);
+              }}
+              className="w-full px-3 py-2 border rounded-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Controllers</label>
+            <input
+              type="text"
+              value={currentTestCase.hardware.controllers}
+              onChange={(e) => {
+                const updatedTestCases = testCases.map(tc => {
+                  if (tc.id === activeTestCase) {
+                    return {
+                      ...tc,
+                      hardware: { ...tc.hardware, controllers: e.target.value }
+                    };
+                  }
+                  return tc;
+                });
+                setTestCases(updatedTestCases);
+              }}
+              className="w-full px-3 py-2 border rounded-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Tracking</label>
+            <input
+              type="text"
+              value={currentTestCase.hardware.tracking}
+              onChange={(e) => {
+                const updatedTestCases = testCases.map(tc => {
+                  if (tc.id === activeTestCase) {
+                    return {
+                      ...tc,
+                      hardware: { ...tc.hardware, tracking: e.target.value }
+                    };
+                  }
+                  return tc;
+                });
+                setTestCases(updatedTestCases);
+              }}
+              className="w-full px-3 py-2 border rounded-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Compute</label>
+            <input
+              type="text"
+              value={currentTestCase.hardware.compute}
+              onChange={(e) => {
+                const updatedTestCases = testCases.map(tc => {
+                  if (tc.id === activeTestCase) {
+                    return {
+                      ...tc,
+                      hardware: { ...tc.hardware, compute: e.target.value }
+                    };
+                  }
+                  return tc;
+                });
+                setTestCases(updatedTestCases);
+              }}
+              className="w-full px-3 py-2 border rounded-md"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Accessories / Notes</label>
+            <textarea
+              value={currentTestCase.hardware.accessories}
+              onChange={(e) => {
+                const updatedTestCases = testCases.map(tc => {
+                  if (tc.id === activeTestCase) {
+                    return {
+                      ...tc,
+                      hardware: { ...tc.hardware, accessories: e.target.value }
+                    };
+                  }
+                  return tc;
+                });
+                setTestCases(updatedTestCases);
+              }}
+              className="w-full px-3 py-2 border rounded-md min-h-[80px]"
+            />
           </div>
         </div>
       </div>
-    );
-  };
+
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <h2 className="text-xl font-semibold mb-4">Test Case Requirements</h2>
+        <div className="flex items-center gap-3 mb-4">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={currentTestCase.requirements.enabled}
+              onChange={(e) => {
+                const updatedTestCases = testCases.map(tc => {
+                  if (tc.id === activeTestCase) {
+                    return {
+                      ...tc,
+                      requirements: { ...tc.requirements, enabled: e.target.checked }
+                    };
+                  }
+                  return tc;
+                });
+                setTestCases(updatedTestCases);
+              }}
+            />
+            <span className="text-sm">Enable requirements for this test case</span>
+          </label>
+        </div>
+
+        {currentTestCase.requirements.enabled && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Max Latency (ms)</label>
+                <input
+                  type="number"
+                  value={currentTestCase.requirements.maxLatency}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const parsed = raw === '' ? '' : parseFloat(raw);
+                    const value = Number.isNaN(parsed) ? '' : parsed;
+                    const updatedTestCases = testCases.map(tc => {
+                      if (tc.id === activeTestCase) {
+                        return {
+                          ...tc,
+                          requirements: { ...tc.requirements, maxLatency: value }
+                        };
+                      }
+                      return tc;
+                    });
+                    setTestCases(updatedTestCases);
+                  }}
+                  className="w-full px-3 py-2 border rounded-md"
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="text-sm font-medium text-gray-700 mb-2">Axis Ranges (mm)</div>
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                {['X', 'Y', 'Z'].map(axis => (
+                  <div key={axis} className="space-y-2">
+                    <div className="font-medium text-gray-600">{axis} Axis</div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        placeholder="Min"
+                        value={currentTestCase.requirements.axisRanges[axis].min}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const parsed = raw === '' ? '' : parseFloat(raw);
+                          const value = Number.isNaN(parsed) ? '' : parsed;
+                          const updatedTestCases = testCases.map(tc => {
+                            if (tc.id === activeTestCase) {
+                              return {
+                                ...tc,
+                                requirements: {
+                                  ...tc.requirements,
+                                  axisRanges: {
+                                    ...tc.requirements.axisRanges,
+                                    [axis]: {
+                                      ...tc.requirements.axisRanges[axis],
+                                      min: value
+                                    }
+                                  }
+                                }
+                              };
+                            }
+                            return tc;
+                          });
+                          setTestCases(updatedTestCases);
+                        }}
+                        className="w-full px-2 py-1 border rounded"
+                      />
+                      <span>to</span>
+                      <input
+                        type="number"
+                        placeholder="Max"
+                        value={currentTestCase.requirements.axisRanges[axis].max}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const parsed = raw === '' ? '' : parseFloat(raw);
+                          const value = Number.isNaN(parsed) ? '' : parsed;
+                          const updatedTestCases = testCases.map(tc => {
+                            if (tc.id === activeTestCase) {
+                              return {
+                                ...tc,
+                                requirements: {
+                                  ...tc.requirements,
+                                  axisRanges: {
+                                    ...tc.requirements.axisRanges,
+                                    [axis]: {
+                                      ...tc.requirements.axisRanges[axis],
+                                      max: value
+                                    }
+                                  }
+                                }
+                              };
+                            }
+                            return tc;
+                          });
+                          setTestCases(updatedTestCases);
+                        }}
+                        className="w-full px-2 py-1 border rounded"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+              <textarea
+                value={currentTestCase.requirements.notes}
+                onChange={(e) => {
+                  const updatedTestCases = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                      return {
+                        ...tc,
+                        requirements: { ...tc.requirements, notes: e.target.value }
+                      };
+                    }
+                    return tc;
+                  });
+                  setTestCases(updatedTestCases);
+                }}
+                className="w-full px-3 py-2 border rounded-md min-h-[80px]"
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
   return (
     <div className="min-h-screen bg-gray-50">
