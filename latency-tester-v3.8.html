@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Latency Tester v3.8</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        .row-pass { background-color: rgba(34, 197, 94, 0.1); }
+        .row-fail { background-color: rgba(239, 68, 68, 0.1); }
+        .row-error { background-color: rgba(251, 191, 36, 0.1); }
+        .row-excluded { background-color: rgba(156, 163, 175, 0.1); }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const LatencyTester = () => {
+            // State management
+            const [testCases, setTestCases] = useState([]);
+            const [activeTestCase, setActiveTestCase] = useState(null);
+            const [activeExecution, setActiveExecution] = useState(null);
+            const [view, setView] = useState('execution'); // execution, requirements, report
+            const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
+            const [editingNote, setEditingNote] = useState(null);
+            const [selectedForReport, setSelectedForReport] = useState([]);
+
+            // Global requirements (shared across all test cases)
+            const [globalRequirements, setGlobalRequirements] = useState({
+                enabled: false,
+                maxLatency: 100, // milliseconds
+                ranges: {
+                    'X+': { minRespond: 5, mustNotRespond: 25 },
+                    'X-': { minRespond: 5, mustNotRespond: 25 },
+                    'Y+': { minRespond: 5, mustNotRespond: 25 },
+                    'Y-': { minRespond: 5, mustNotRespond: 25 },
+                    'Z+': { minRespond: 5, mustNotRespond: 25 },
+                    'Z-': { minRespond: 5, mustNotRespond: 25 }
+                }
+            });
+
+            const importRef = useRef(null);
+
+            // Utility: Parse timecode
+            const parseTimecode = (timecode, fps = 30) => {
+                const parts = timecode.split(':');
+                if (parts.length !== 4) return 0;
+
+                const hours = parseInt(parts[0]) || 0;
+                const minutes = parseInt(parts[1]) || 0;
+                const seconds = parseInt(parts[2]) || 0;
+                const frames = parseInt(parts[3]) || 0;
+
+                const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+                const frameTime = frames / fps;
+
+                return (totalSeconds + frameTime) * 1000;
+            };
+
+            const msToSecondsFormat = (ms) => {
+                return (ms / 1000).toFixed(3);
+            };
+
+            const formatMsToTime = (ms) => {
+                if (!ms && ms !== 0) return '-';
+                return (ms / 1000).toFixed(3) + 's';
+            };
+
+            // Parse marker naming
+            function parseMarkerName(markerName) {
+                // Yellow marker: AB6 Single Tag1.1 (X+)
+                const yellowRegex = /AB(\d+)\s+(.+?)\s+Tag([\d.]+)\s*\(([XYZ])([+-])\)/i;
+                const yellowMatch = markerName.match(yellowRegex);
+
+                if (yellowMatch) {
+                    return {
+                        type: 'identifier',
+                        abNumber: 'AB' + yellowMatch[1],
+                        descriptor: yellowMatch[2],
+                        tagVersion: yellowMatch[3],
+                        axis: yellowMatch[4].toUpperCase(),
+                        direction: yellowMatch[5]
+                    };
+                }
+
+                // Action marker: TagOn #1, TagOn.Activation #1
+                const actionRegex = /Tag(\w+)(?:\.(\w+))?\s+#(\d+)/i;
+                const actionMatch = markerName.match(actionRegex);
+
+                if (actionMatch) {
+                    return {
+                        type: 'action',
+                        tagAction: actionMatch[1],
+                        subAction: actionMatch[2] || '',
+                        testRun: actionMatch[3]
+                    };
+                }
+
+                // Error marker: Error-start #1, Error-end #1
+                const errorRegex = /Error-(start|end)\s+#(\d+)/i;
+                const errorMatch = markerName.match(errorRegex);
+
+                if (errorMatch) {
+                    return {
+                        type: 'error',
+                        errorType: errorMatch[1],
+                        errorNumber: errorMatch[2]
+                    };
+                }
+
+                return null;
+            }
+
+            // Parse CSV with FPS defaulting
+            const parseDavinciCSV = (csvText, filename) => {
+                console.log('Parsing CSV: ' + filename);
+                const lines = csvText.split('\n').filter(line => line.trim());
+                if (lines.length < 2) return null;
+
+                const parseCSVLine = (line) => {
+                    const result = [];
+                    let current = '';
+                    let inQuotes = false;
+
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            result.push(current.trim());
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    result.push(current.trim());
+                    return result;
+                };
+
+                // Parse all data rows
+                const dataRows = [];
+                let detectedFPS = 30; // Default FPS
+
+                for (let i = 1; i < lines.length; i++) {
+                    const row = parseCSVLine(lines[i]);
+                    if (row.length > 20) {
+                        const rowFPS = parseFloat(row[17]);
+                        if (rowFPS > 0 && rowFPS !== detectedFPS) {
+                            detectedFPS = rowFPS;
+                        }
+
+                        dataRows.push({
+                            recordIn: row[9] || '',
+                            color: row[19] || '',
+                            notes: row[20] || ''
+                        });
+                    }
+                }
+
+                console.log('Detected FPS: ' + detectedFPS);
+
+                const timestamps = [];
+                const pendingMarkers = {};
+                const errorGroups = {}; // Group errors by error number
+                let currentMetadata = {};
+                const axesFound = new Set();
+
+                dataRows.forEach((row, index) => {
+                    const color = row.color.toLowerCase();
+                    const notes = row.notes;
+                    const timeMs = parseTimecode(row.recordIn, detectedFPS);
+                    const timeStr = msToSecondsFormat(timeMs);
+
+                    // Skip blue markers (placeholders)
+                    if (color === 'blue') return;
+
+                    // Current axis context
+                    const currentAxis = currentMetadata?.axis || '';
+                    const currentDirection = currentMetadata?.direction || '';
+
+                    // Handle red markers (error zones) with grouping
+                    if (color === 'red') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'error') {
+                            const errorNum = parsed.errorNumber;
+
+                            if (!errorGroups[errorNum]) {
+                                errorGroups[errorNum] = { start: null, end: null };
+                            }
+
+                            if (parsed.errorType === 'start') {
+                                errorGroups[errorNum].start = {
+                                    time: timeStr,
+                                    recordIn: row.recordIn,
+                                    timeMs: timeMs
+                                };
+                            } else {
+                                errorGroups[errorNum].end = {
+                                    time: timeStr,
+                                    recordIn: row.recordIn,
+                                    timeMs: timeMs
+                                };
+                            }
+
+                            // If we have both start and end, create error entry
+                            if (errorGroups[errorNum].start && errorGroups[errorNum].end) {
+                                const start = errorGroups[errorNum].start;
+                                const end = errorGroups[errorNum].end;
+                                const duration = end.timeMs - start.timeMs;
+
+                                timestamps.push({
+                                    id: Date.now().toString() + Math.random(),
+                                    time: start.time,
+                                    recordIn: start.recordIn,
+                                    label: 'Error',
+                                    note: 'Error #' + errorNum + ' (Duration: ' + msToSecondsFormat(duration) + 's)',
+                                    userNotes: '',
+                                    stage: '',
+                                    axis: currentAxis,
+                                    direction: currentDirection,
+                                    latencyMs: null,
+                                    excludeFromStats: true,
+                                    isError: true,
+                                    errorNumber: errorNum,
+                                    errorDuration: duration
+                                });
+                            }
+                        }
+                        return;
+                    }
+
+                    // Handle yellow markers (axis identifiers)
+                    if (color === 'yellow') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'identifier') {
+                            currentMetadata = parsed;
+                            const axisKey = parsed.axis + parsed.direction;
+                            axesFound.add(axisKey);
+                            console.log('Axis detected: ' + axisKey);
+                        }
+                    }
+                    // Handle green markers (TagOn trigger)
+                    else if (color === 'green') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = 'tagOn-' + parsed.testRun;
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata
+                            };
+                        }
+                    }
+                    // Handle pink markers (TagOn activation)
+                    else if (color === 'pink') {
+                        const tagOnKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOn-'));
+                        if (tagOnKeys.length > 0) {
+                            const lastKey = tagOnKeys[tagOnKeys.length - 1];
+                            const tagOnMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+
+                            const latency = timeMs - tagOnMarker.timeMs;
+
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOnMarker.time,
+                                recordIn: tagOnMarker.recordIn,
+                                label: 'TagOn',
+                                note: tagOnMarker.notes + ' → ' + notes,
+                                userNotes: '',
+                                stage: 'Tag' + (tagOnMarker.metadata?.tagVersion || '1.0') + ' Run#' + tagOnMarker.testRun,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOnMarker.metadata?.axis || '',
+                                direction: tagOnMarker.metadata?.direction || '',
+                                abNumber: tagOnMarker.metadata?.abNumber || '',
+                                tagVersion: tagOnMarker.metadata?.tagVersion || '',
+                                testRun: tagOnMarker.testRun,
+                                excludeFromStats: false,
+                                calculationExplained: tagOnMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency),
+                                isError: false
+                            });
+                        }
+                    }
+                    // Handle cyan markers (TagOff trigger)
+                    else if (color === 'cyan') {
+                        const parsed = parseMarkerName(notes);
+                        if (parsed && parsed.type === 'action') {
+                            const key = 'tagOff-' + parsed.testRun;
+                            pendingMarkers[key] = {
+                                time: timeStr,
+                                recordIn: row.recordIn,
+                                timeMs: timeMs,
+                                testRun: parsed.testRun,
+                                notes: notes,
+                                metadata: currentMetadata
+                            };
+                        }
+                    }
+                    // Handle lemon/lime markers (TagOff activation)
+                    else if (color === 'lemon' || color === 'lime') {
+                        const tagOffKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOff-'));
+                        if (tagOffKeys.length > 0) {
+                            const lastKey = tagOffKeys[tagOffKeys.length - 1];
+                            const tagOffMarker = pendingMarkers[lastKey];
+                            delete pendingMarkers[lastKey];
+
+                            const latency = timeMs - tagOffMarker.timeMs;
+
+                            timestamps.push({
+                                id: Date.now().toString() + Math.random(),
+                                time: tagOffMarker.time,
+                                recordIn: tagOffMarker.recordIn,
+                                label: 'TagOff',
+                                note: tagOffMarker.notes + ' → ' + notes,
+                                userNotes: '',
+                                stage: 'Tag' + (tagOffMarker.metadata?.tagVersion || '1.0') + ' Run#' + tagOffMarker.testRun,
+                                pairedTime: timeStr,
+                                pairedRecordIn: row.recordIn,
+                                latency: msToSecondsFormat(latency),
+                                latencyMs: latency,
+                                axis: tagOffMarker.metadata?.axis || '',
+                                direction: tagOffMarker.metadata?.direction || '',
+                                abNumber: tagOffMarker.metadata?.abNumber || '',
+                                tagVersion: tagOffMarker.metadata?.tagVersion || '',
+                                testRun: tagOffMarker.testRun,
+                                excludeFromStats: false,
+                                calculationExplained: tagOffMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency),
+                                isError: false
+                            });
+                        }
+                    }
+                });
+
+                // Handle unmatched markers
+                Object.values(pendingMarkers).forEach(marker => {
+                    timestamps.push({
+                        id: Date.now().toString() + Math.random(),
+                        time: marker.time,
+                        recordIn: marker.recordIn,
+                        label: 'Error',
+                        note: marker.notes + ' (UNMATCHED)',
+                        userNotes: '',
+                        stage: '',
+                        axis: marker.metadata?.axis || '',
+                        direction: marker.metadata?.direction || '',
+                        latencyMs: null,
+                        excludeFromStats: true,
+                        isError: true
+                    });
+                });
+
+                console.log('Parsed timestamps: ' + timestamps.length);
+                console.log('Axes found: ' + Array.from(axesFound).join(', '));
+
+                return {
+                    timestamps,
+                    metadata: currentMetadata,
+                    axesFound: Array.from(axesFound),
+                    filename,
+                    fps: detectedFPS
+                };
+            };
+
+            // Statistics calculation
+            function getStatistics(timestamps) {
+                const validTimestamps = timestamps.filter(ts =>
+                    ts.latencyMs != null && !ts.excludeFromStats && !ts.isError
+                );
+
+                if (validTimestamps.length === 0) {
+                    return { min: 0, max: 0, avg: 0, total: 0 };
+                }
+
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+                return { min, max, avg, total: validTimestamps.length };
+            }
+
+            // Get axis statistics with requirements checking
+            function getAxisStatistics(timestamps, axis, direction, requirements) {
+                const axisTimestamps = timestamps.filter(ts =>
+                    ts.axis === axis &&
+                    ts.direction === direction &&
+                    !ts.isError
+                );
+
+                const validTimestamps = axisTimestamps.filter(ts =>
+                    ts.latencyMs != null && !ts.excludeFromStats
+                );
+
+                if (validTimestamps.length === 0) {
+                    return {
+                        min: 0,
+                        max: 0,
+                        avg: 0,
+                        total: 0,
+                        passed: 0,
+                        failed: 0,
+                        passRate: 0,
+                        errorCount: axisTimestamps.filter(ts => ts.isError).length
+                    };
+                }
+
+                const values = validTimestamps.map(ts => ts.latencyMs);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+                let passed = 0;
+                let failed = 0;
+
+                if (requirements && requirements.enabled) {
+                    validTimestamps.forEach(ts => {
+                        if (ts.latencyMs <= requirements.maxLatency) {
+                            passed++;
+                        } else {
+                            failed++;
+                        }
+                    });
+                }
+
+                const passRate = validTimestamps.length > 0 ? (passed / validTimestamps.length) * 100 : 0;
+                const errorCount = axisTimestamps.filter(ts => ts.isError).length;
+
+                return { min, max, avg, total: validTimestamps.length, passed, failed, passRate, errorCount };
+            }
+
+            // Group by axis
+            const groupByAxis = (timestamps) => {
+                const groups = {};
+                timestamps.forEach(ts => {
+                    if (ts.axis && ts.direction) {
+                        const key = ts.axis + ts.direction;
+                        if (!groups[key]) groups[key] = [];
+                        groups[key].push(ts);
+                    }
+                });
+                return groups;
+            };
+
+            // Icon component (simplified emojis)
+            const Icon = ({ name }) => {
+                const icons = {
+                    'plus': '➕',
+                    'trash-2': '🗑️',
+                    'download': '⬇️',
+                    'upload': '⬆️',
+                    'edit': '✏️',
+                    'save': '💾',
+                    'x': '❌',
+                    'check': '✅',
+                    'bar-chart': '📊',
+                    'settings': '⚙️',
+                    'file-text': '📄',
+                    'eye': '👁️',
+                    'eye-off': '👁️‍🗨️'
+                };
+                return <span>{icons[name] || '•'}</span>;
+            };
+
+            // Create new test case
+            const createNewTestCase = () => ({
+                id: Date.now().toString(),
+                name: 'Test Case ' + (testCases.length + 1),
+                metadata: {},
+                distances: {}, // Manual distance input per axis
+                executions: [{
+                    id: Date.now().toString() + '_exec',
+                    name: 'Execution 1',
+                    timestamps: [],
+                    notes: ''
+                }]
+            });
+
+            // Create new execution
+            const createNewExecution = (testCase) => ({
+                id: Date.now().toString() + '_exec',
+                name: 'Execution ' + (testCase.executions.length + 1),
+                timestamps: [],
+                notes: ''
+            });
+
+            // Import file handler
+            const handleFileImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const content = event.target.result;
+
+                    if (file.name.toLowerCase().endsWith('.csv')) {
+                        try {
+                            const result = parseDavinciCSV(content, file.name);
+                            if (result && result.timestamps.length > 0) {
+                                const newTestCase = createNewTestCase();
+                                newTestCase.name = file.name.replace('.csv', '');
+                                newTestCase.metadata = result.metadata || {};
+                                newTestCase.executions[0].name = file.name;
+                                newTestCase.executions[0].timestamps = result.timestamps;
+                                newTestCase.executions[0].fps = result.fps;
+
+                                setTestCases([...testCases, newTestCase]);
+                                setActiveTestCase(newTestCase.id);
+                                setActiveExecution(newTestCase.executions[0].id);
+
+                                alert('CSV imported successfully!\n' +
+                                    'FPS: ' + result.fps + '\n' +
+                                    'Timestamps: ' + result.timestamps.length + '\n' +
+                                    'Axes: ' + result.axesFound.join(', '));
+                            } else {
+                                alert('Failed to parse CSV file. Check format.');
+                            }
+                        } catch (err) {
+                            alert('Error importing CSV: ' + err.message);
+                            console.error(err);
+                        }
+                    } else if (file.name.toLowerCase().endsWith('.json')) {
+                        try {
+                            const data = JSON.parse(content);
+                            if (data.testCases) {
+                                setTestCases(data.testCases);
+                                setGlobalRequirements(data.globalRequirements || globalRequirements);
+                                alert('Data imported successfully!');
+                            }
+                        } catch (err) {
+                            alert('Error importing JSON: ' + err.message);
+                        }
+                    }
+                };
+
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            // Export to JSON
+            const handleExportJSON = () => {
+                const data = {
+                    testCases,
+                    globalRequirements,
+                    exportDate: new Date().toISOString()
+                };
+
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'latency-test-data-' + new Date().toISOString().split('T')[0] + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            };
+
+            // Toggle marker inclusion
+            const toggleMarkerInclusion = (timestampId) => {
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.map(ts => {
+                                            if (ts.id === timestampId) {
+                                                return { ...ts, excludeFromStats: !ts.excludeFromStats };
+                                            }
+                                            return ts;
+                                        })
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Delete timestamp
+            const handleDeleteTimestamp = (timestampId) => {
+                if (!confirm('Delete this entry?')) return;
+
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.filter(ts => ts.id !== timestampId)
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Update test case name
+            const updateTestCaseName = (testCaseId, newName) => {
+                const updated = testCases.map(tc =>
+                    tc.id === testCaseId ? { ...tc, name: newName } : tc
+                );
+                setTestCases(updated);
+            };
+
+            // Delete test case
+            const deleteTestCase = (testCaseId) => {
+                if (!confirm('Delete this test case? This cannot be undone.')) return;
+
+                const updated = testCases.filter(tc => tc.id !== testCaseId);
+                setTestCases(updated);
+
+                if (activeTestCase === testCaseId) {
+                    setActiveTestCase(updated.length > 0 ? updated[0].id : null);
+                    setActiveExecution(updated.length > 0 ? updated[0].executions[0].id : null);
+                }
+            };
+
+            // Update distance for axis
+            const updateAxisDistance = (axis, direction, distance) => {
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            distances: {
+                                ...tc.distances,
+                                [axis + direction]: parseFloat(distance) || 0
+                            }
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Get current test case and execution
+            const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
+            const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
+
+            // Requirements Settings View
+            const renderRequirementsView = () => (
+                <div className="p-6 max-w-4xl">
+                    <h2 className="text-2xl font-bold mb-6">Requirements Settings</h2>
+
+                    <div className="bg-white rounded-lg shadow p-6 mb-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <label className="text-lg font-semibold">Enable Requirements Checking</label>
+                            <input
+                                type="checkbox"
+                                checked={globalRequirements.enabled}
+                                onChange={(e) => setGlobalRequirements({
+                                    ...globalRequirements,
+                                    enabled: e.target.checked
+                                })}
+                                className="w-5 h-5"
+                            />
+                        </div>
+
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium mb-2">
+                                Maximum Latency (milliseconds)
+                            </label>
+                            <input
+                                type="number"
+                                value={globalRequirements.maxLatency}
+                                onChange={(e) => setGlobalRequirements({
+                                    ...globalRequirements,
+                                    maxLatency: parseFloat(e.target.value) || 100
+                                })}
+                                className="w-full px-3 py-2 border rounded"
+                                disabled={!globalRequirements.enabled}
+                            />
+                        </div>
+
+                        <h3 className="text-lg font-semibold mb-4">Range Requirements (mm)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'].map(axis => (
+                                <div key={axis} className="border rounded p-4">
+                                    <h4 className="font-semibold mb-2">{axis}</h4>
+                                    <div className="space-y-2">
+                                        <div>
+                                            <label className="block text-sm mb-1">Min Must Respond</label>
+                                            <input
+                                                type="number"
+                                                value={globalRequirements.ranges[axis].minRespond}
+                                                onChange={(e) => setGlobalRequirements({
+                                                    ...globalRequirements,
+                                                    ranges: {
+                                                        ...globalRequirements.ranges,
+                                                        [axis]: {
+                                                            ...globalRequirements.ranges[axis],
+                                                            minRespond: parseFloat(e.target.value) || 0
+                                                        }
+                                                    }
+                                                })}
+                                                className="w-full px-2 py-1 border rounded"
+                                                disabled={!globalRequirements.enabled}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm mb-1">Must NOT Respond Beyond</label>
+                                            <input
+                                                type="number"
+                                                value={globalRequirements.ranges[axis].mustNotRespond}
+                                                onChange={(e) => setGlobalRequirements({
+                                                    ...globalRequirements,
+                                                    ranges: {
+                                                        ...globalRequirements.ranges,
+                                                        [axis]: {
+                                                            ...globalRequirements.ranges[axis],
+                                                            mustNotRespond: parseFloat(e.target.value) || 0
+                                                        }
+                                                    }
+                                                })}
+                                                className="w-full px-2 py-1 border rounded"
+                                                disabled={!globalRequirements.enabled}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <button
+                        onClick={() => setView('execution')}
+                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                        Back to Execution View
+                    </button>
+                </div>
+            );
+
+            // Test Report View
+            const renderReportView = () => {
+                const selectedTests = testCases.filter(tc =>
+                    selectedForReport.includes(tc.id)
+                );
+
+                return (
+                    <div className="p-6">
+                        <div className="no-print mb-6 flex justify-between items-center">
+                            <h2 className="text-2xl font-bold">Test Report</h2>
+                            <div className="space-x-2">
+                                <button
+                                    onClick={() => window.print()}
+                                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                                >
+                                    <Icon name="download" /> Print/Export PDF
+                                </button>
+                                <button
+                                    onClick={() => setView('execution')}
+                                    className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                                >
+                                    Back
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <div className="text-center mb-8">
+                                <h1 className="text-3xl font-bold mb-2">Hardware Latency Test Report</h1>
+                                <p className="text-gray-600">Generated: {new Date().toLocaleString()}</p>
+                            </div>
+
+                            {selectedTests.length === 0 ? (
+                                <div className="text-center py-12 text-gray-500">
+                                    <p>No test cases selected for report.</p>
+                                    <p className="text-sm mt-2">Select test cases in the execution view to include them in the report.</p>
+                                </div>
+                            ) : (
+                                selectedTests.map(tc => {
+                                    const allTimestamps = tc.executions.flatMap(ex => ex.timestamps);
+                                    const overallStats = getStatistics(allTimestamps);
+                                    const axisList = [...new Set(allTimestamps
+                                        .filter(ts => ts.axis && ts.direction)
+                                        .map(ts => ts.axis + ts.direction)
+                                    )];
+
+                                    return (
+                                        <div key={tc.id} className="mb-12 page-break-after">
+                                            <h2 className="text-2xl font-bold mb-4 border-b pb-2">{tc.name}</h2>
+
+                                            {/* Test Information */}
+                                            <div className="mb-6">
+                                                <h3 className="text-lg font-semibold mb-2">Test Information</h3>
+                                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                                    <div>
+                                                        <span className="font-medium">AB Number:</span> {tc.metadata.abNumber || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Tag Version:</span> {tc.metadata.tagVersion || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Total Executions:</span> {tc.executions.length}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Total Measurements:</span> {allTimestamps.filter(ts => !ts.isError).length}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Tested Distances */}
+                                            {tc.distances && Object.keys(tc.distances).length > 0 && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-2">Tested Distances</h3>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {Object.entries(tc.distances).map(([axis, distance]) => (
+                                                            <span key={axis} className="px-3 py-1 bg-blue-100 rounded">
+                                                                {axis}: {distance}mm
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Overall Statistics */}
+                                            <div className="mb-6">
+                                                <h3 className="text-lg font-semibold mb-2">Overall Statistics</h3>
+                                                <div className="grid grid-cols-4 gap-4 text-center">
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-green-600">
+                                                            {formatMsToTime(overallStats.min)}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Minimum</div>
+                                                    </div>
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-blue-600">
+                                                            {formatMsToTime(overallStats.avg)}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Average</div>
+                                                    </div>
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-red-600">
+                                                            {formatMsToTime(overallStats.max)}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Maximum</div>
+                                                    </div>
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-gray-600">
+                                                            {overallStats.total}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Count</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Per-Axis Breakdown */}
+                                            <div className="mb-6">
+                                                <h3 className="text-lg font-semibold mb-2">Per-Axis Breakdown</h3>
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-gray-50">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left">Axis</th>
+                                                            <th className="px-4 py-2 text-right">Min</th>
+                                                            <th className="px-4 py-2 text-right">Avg</th>
+                                                            <th className="px-4 py-2 text-right">Max</th>
+                                                            <th className="px-4 py-2 text-right">Count</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {axisList.map(axisKey => {
+                                                            const axis = axisKey[0];
+                                                            const direction = axisKey[1];
+                                                            const stats = getAxisStatistics(allTimestamps, axis, direction, globalRequirements);
+
+                                                            return (
+                                                                <tr key={axisKey} className="border-t">
+                                                                    <td className="px-4 py-2 font-medium">{axisKey}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(stats.min)}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(stats.avg)}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(stats.max)}</td>
+                                                                    <td className="px-4 py-2 text-right">{stats.total}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {/* Requirements Check */}
+                                            {globalRequirements.enabled && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-2">Requirements Check</h3>
+                                                    <div className="text-sm">
+                                                        <p><span className="font-medium">Maximum Latency:</span> {globalRequirements.maxLatency}ms</p>
+                                                        <p className="mt-2">
+                                                            <span className={overallStats.max <= globalRequirements.maxLatency ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
+                                                                {overallStats.max <= globalRequirements.maxLatency ? '✅ PASS' : '❌ FAIL'}
+                                                            </span>
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            // Execution View
+            const renderExecutionView = () => {
+                if (!currentTestCase || !currentExecution) {
+                    return (
+                        <div className="flex items-center justify-center h-full">
+                            <div className="text-center">
+                                <p className="text-gray-500 text-lg mb-4">No test case loaded</p>
+                                <button
+                                    onClick={() => {
+                                        const newTC = createNewTestCase();
+                                        setTestCases([...testCases, newTC]);
+                                        setActiveTestCase(newTC.id);
+                                        setActiveExecution(newTC.executions[0].id);
+                                    }}
+                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                >
+                                    <Icon name="plus" /> Create New Test Case
+                                </button>
+                            </div>
+                        </div>
+                    );
+                }
+
+                const timestamps = currentExecution.timestamps;
+                const overallStats = getStatistics(timestamps);
+                const axisGroups = groupByAxis(timestamps);
+                const errorEvents = timestamps.filter(ts => ts.isError);
+
+                // Group errors by error number
+                const errorsByNumber = {};
+                errorEvents.forEach(err => {
+                    if (err.errorNumber) {
+                        if (!errorsByNumber[err.errorNumber]) {
+                            errorsByNumber[err.errorNumber] = [];
+                        }
+                        errorsByNumber[err.errorNumber].push(err);
+                    }
+                });
+
+                return (
+                    <div className="p-6">
+                        {/* Test Case Header */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex-1">
+                                    <input
+                                        type="text"
+                                        value={currentTestCase.name}
+                                        onChange={(e) => updateTestCaseName(currentTestCase.id, e.target.value)}
+                                        className="text-xl font-bold border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none px-2 py-1"
+                                    />
+                                </div>
+                                <div className="flex space-x-2">
+                                    <button
+                                        onClick={() => {
+                                            setSelectedForReport(prev =>
+                                                prev.includes(currentTestCase.id)
+                                                    ? prev.filter(id => id !== currentTestCase.id)
+                                                    : [...prev, currentTestCase.id]
+                                            );
+                                        }}
+                                        className={`px-3 py-1 rounded ${
+                                            selectedForReport.includes(currentTestCase.id)
+                                                ? 'bg-green-600 text-white'
+                                                : 'bg-gray-200 text-gray-700'
+                                        }`}
+                                    >
+                                        <Icon name={selectedForReport.includes(currentTestCase.id) ? 'check' : 'eye'} />
+                                        {selectedForReport.includes(currentTestCase.id) ? 'In Report' : 'Add to Report'}
+                                    </button>
+                                    <button
+                                        onClick={() => deleteTestCase(currentTestCase.id)}
+                                        className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                                    >
+                                        <Icon name="trash-2" /> Delete Test Case
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Manual Distance Input */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-2">Test Distances (mm)</h3>
+                            <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                                {['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'].map(axisKey => (
+                                    <div key={axisKey}>
+                                        <label className="block text-sm mb-1">{axisKey}</label>
+                                        <input
+                                            type="number"
+                                            value={currentTestCase.distances?.[axisKey] || ''}
+                                            onChange={(e) => updateAxisDistance(axisKey[0], axisKey[1], e.target.value)}
+                                            placeholder="mm"
+                                            className="w-full px-2 py-1 border rounded text-sm"
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Overall Statistics */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-2">Overall Statistics</h3>
+                            <div className="grid grid-cols-4 gap-4 text-center">
+                                <div>
+                                    <div className="text-lg font-bold text-green-600">
+                                        {formatMsToTime(overallStats.min)}
+                                    </div>
+                                    <div className="text-sm text-gray-600">Min</div>
+                                </div>
+                                <div>
+                                    <div className="text-lg font-bold text-blue-600">
+                                        {formatMsToTime(overallStats.avg)}
+                                    </div>
+                                    <div className="text-sm text-gray-600">Avg</div>
+                                </div>
+                                <div>
+                                    <div className="text-lg font-bold text-red-600">
+                                        {formatMsToTime(overallStats.max)}
+                                    </div>
+                                    <div className="text-sm text-gray-600">Max</div>
+                                </div>
+                                <div>
+                                    <div className="text-lg font-bold text-gray-600">
+                                        {overallStats.total}
+                                    </div>
+                                    <div className="text-sm text-gray-600">Count</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Per-Axis Statistics */}
+                        {Object.keys(axisGroups).length > 0 && (
+                            <div className="bg-white rounded-lg shadow p-4 mb-4">
+                                <h3 className="font-semibold mb-2">Per-Axis Breakdown</h3>
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                                    {Object.entries(axisGroups).map(([axisKey, timestamps]) => {
+                                        const axis = axisKey[0];
+                                        const direction = axisKey[1];
+                                        const stats = getAxisStatistics(timestamps, axis, direction, globalRequirements);
+
+                                        return (
+                                            <div key={axisKey} className="border rounded p-2">
+                                                <div className="font-semibold">{axisKey}</div>
+                                                <div className="text-xs text-gray-600">
+                                                    Min: {formatMsToTime(stats.min)} |
+                                                    Avg: {formatMsToTime(stats.avg)} |
+                                                    Max: {formatMsToTime(stats.max)}
+                                                </div>
+                                                <div className="text-xs text-gray-500">
+                                                    Count: {stats.total}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Error Events Grouped */}
+                        {Object.keys(errorsByNumber).length > 0 && (
+                            <div className="bg-yellow-50 rounded-lg shadow p-4 mb-4">
+                                <h3 className="font-semibold mb-2">Error Events</h3>
+                                <div className="space-y-2">
+                                    {Object.entries(errorsByNumber).map(([errorNum, errors]) => (
+                                        <div key={errorNum} className="bg-white rounded p-2 border border-yellow-200">
+                                            <div className="font-medium text-sm">Error #{errorNum}</div>
+                                            {errors.map(err => (
+                                                <div key={err.id} className="text-xs text-gray-600 ml-2">
+                                                    {err.note}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Timestamp Table */}
+                        <div className="bg-white rounded-lg shadow overflow-hidden">
+                            <div className="p-4 border-b">
+                                <h3 className="font-semibold">Timestamps</h3>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-4 py-2 text-left">Include</th>
+                                            <th className="px-4 py-2 text-left">Time (s)</th>
+                                            <th className="px-4 py-2 text-left">Timecode</th>
+                                            <th className="px-4 py-2 text-left">Label</th>
+                                            <th className="px-4 py-2 text-left">Axis</th>
+                                            <th className="px-4 py-2 text-left">Note</th>
+                                            <th className="px-4 py-2 text-right">Latency</th>
+                                            <th className="px-4 py-2 text-center">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {timestamps.map((ts, idx) => {
+                                            const rowClass = ts.isError ? 'row-error' :
+                                                ts.excludeFromStats ? 'row-excluded' :
+                                                showPassFailHighlight && globalRequirements.enabled && ts.latencyMs ?
+                                                    (ts.latencyMs <= globalRequirements.maxLatency ? 'row-pass' : 'row-fail') : '';
+
+                                            return (
+                                                <tr key={ts.id} className={rowClass + ' border-t hover:bg-gray-50'}>
+                                                    <td className="px-4 py-2">
+                                                        {!ts.isError && (
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={!ts.excludeFromStats}
+                                                                onChange={() => toggleMarkerInclusion(ts.id)}
+                                                                className="w-4 h-4"
+                                                            />
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-2 font-mono">{ts.time}</td>
+                                                    <td className="px-4 py-2 font-mono text-xs">{ts.recordIn}</td>
+                                                    <td className="px-4 py-2">
+                                                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                                            ts.label === 'TagOn' ? 'bg-green-100 text-green-800' :
+                                                            ts.label === 'TagOff' ? 'bg-blue-100 text-blue-800' :
+                                                            'bg-red-100 text-red-800'
+                                                        }`}>
+                                                            {ts.label}
+                                                        </span>
+                                                    </td>
+                                                    <td className="px-4 py-2">
+                                                        {ts.axis && ts.direction ? (
+                                                            <span className="font-medium">{ts.axis}{ts.direction}</span>
+                                                        ) : '-'}
+                                                    </td>
+                                                    <td className="px-4 py-2 text-xs max-w-xs truncate" title={ts.note}>
+                                                        {ts.note}
+                                                    </td>
+                                                    <td className="px-4 py-2 text-right font-mono font-bold">
+                                                        {ts.latency || '-'}
+                                                    </td>
+                                                    <td className="px-4 py-2 text-center">
+                                                        <button
+                                                            onClick={() => handleDeleteTimestamp(ts.id)}
+                                                            className="text-red-600 hover:text-red-800"
+                                                        >
+                                                            <Icon name="trash-2" />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            // Main render
+            return (
+                <div className="min-h-screen bg-gray-100">
+                    {/* Header */}
+                    <div className="bg-blue-600 text-white shadow-lg no-print">
+                        <div className="px-6 py-4">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h1 className="text-2xl font-bold">Hardware Latency Tester</h1>
+                                    <p className="text-blue-100 text-sm">v3.8 - Professional Edition</p>
+                                </div>
+                                <div className="flex space-x-2">
+                                    <button
+                                        onClick={() => importRef.current?.click()}
+                                        className="px-4 py-2 bg-blue-700 rounded hover:bg-blue-800"
+                                    >
+                                        <Icon name="upload" /> Import
+                                    </button>
+                                    <button
+                                        onClick={handleExportJSON}
+                                        className="px-4 py-2 bg-blue-700 rounded hover:bg-blue-800"
+                                        disabled={testCases.length === 0}
+                                    >
+                                        <Icon name="download" /> Export
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Navigation */}
+                        <div className="px-6 flex space-x-1 border-t border-blue-500">
+                            <button
+                                onClick={() => setView('execution')}
+                                className={`px-4 py-2 ${view === 'execution' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="bar-chart" /> Execution
+                            </button>
+                            <button
+                                onClick={() => setView('requirements')}
+                                className={`px-4 py-2 ${view === 'requirements' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="settings" /> Requirements
+                            </button>
+                            <button
+                                onClick={() => setView('report')}
+                                className={`px-4 py-2 ${view === 'report' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="file-text" /> Report ({selectedForReport.length})
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <div className="flex">
+                        {/* Sidebar */}
+                        {view === 'execution' && (
+                            <div className="w-64 bg-white shadow-lg no-print" style={{ minHeight: 'calc(100vh - 140px)' }}>
+                                <div className="p-4">
+                                    <h3 className="font-semibold mb-2">Test Cases</h3>
+                                    <button
+                                        onClick={() => {
+                                            const newTC = createNewTestCase();
+                                            setTestCases([...testCases, newTC]);
+                                            setActiveTestCase(newTC.id);
+                                            setActiveExecution(newTC.executions[0].id);
+                                        }}
+                                        className="w-full px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 mb-2"
+                                    >
+                                        <Icon name="plus" /> New Test Case
+                                    </button>
+                                    <div className="space-y-1">
+                                        {testCases.map(tc => (
+                                            <div
+                                                key={tc.id}
+                                                onClick={() => {
+                                                    setActiveTestCase(tc.id);
+                                                    setActiveExecution(tc.executions[0].id);
+                                                }}
+                                                className={`px-3 py-2 rounded cursor-pointer text-sm truncate ${
+                                                    activeTestCase === tc.id ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-100'
+                                                }`}
+                                                title={tc.name}
+                                            >
+                                                {tc.name}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Main View */}
+                        <div className="flex-1">
+                            {view === 'execution' && renderExecutionView()}
+                            {view === 'requirements' && renderRequirementsView()}
+                            {view === 'report' && renderReportView()}
+                        </div>
+                    </div>
+
+                    {/* Hidden file input */}
+                    <input
+                        ref={importRef}
+                        type="file"
+                        accept=".csv,.json"
+                        onChange={handleFileImport}
+                        className="hidden"
+                    />
+                </div>
+            );
+        };
+
+        // Render app
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<LatencyTester />);
+    </script>
+</body>
+</html>
