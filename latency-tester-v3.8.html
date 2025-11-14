@@ -88,6 +88,7 @@
                     };
                 }
 
+                // Action marker: TagOn #1, TagOn.Activation #1
                 const actionRegex = /Tag(\w+)(?:\.(\w+))?\s+#(\d+)/i;
                 const actionMatch = markerName.match(actionRegex);
 
@@ -100,6 +101,7 @@
                     };
                 }
 
+                // Error marker: Error-start #1, Error-end #1
                 const errorRegex = /Error-(start|end)\s+#(\d+)/i;
                 const errorMatch = markerName.match(errorRegex);
 
@@ -140,8 +142,9 @@
                     return result;
                 };
 
+                // Parse all data rows
                 const dataRows = [];
-                let detectedFPS = 30;
+                let detectedFPS = 30; // Default FPS
 
                 for (let i = 1; i < lines.length; i++) {
                     const row = parseCSVLine(lines[i]);
@@ -173,12 +176,14 @@
                     const timeMs = parseTimecode(row.recordIn, detectedFPS);
                     const timeStr = msToSecondsFormat(timeMs);
 
+                    // Skip blue markers (placeholders)
                     if (color === 'blue') return;
 
+                    // Current axis context
                     const currentAxis = currentMetadata?.axis || '';
                     const currentDirection = currentMetadata?.direction || '';
 
-                    // Red markers - Error grouping by number
+                    // Handle red markers (error zones) with grouping
                     if (color === 'red') {
                         const parsed = parseMarkerName(notes);
                         if (parsed && parsed.type === 'error') {
@@ -228,7 +233,7 @@
                         return;
                     }
 
-                    // Yellow markers
+                    // Handle yellow markers (axis identifiers)
                     if (color === 'yellow') {
                         const parsed = parseMarkerName(notes);
                         if (parsed && parsed.type === 'identifier') {
@@ -255,7 +260,7 @@
                             };
                         }
                     }
-                    // Pink markers (TagOn activation)
+                    // Handle pink markers (TagOn activation)
                     else if (color === 'pink') {
                         const tagOnKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOn-'));
                         if (tagOnKeys.length > 0) {
@@ -288,7 +293,7 @@
                             });
                         }
                     }
-                    // Cyan markers (TagOff trigger)
+                    // Handle cyan markers (TagOff trigger)
                     else if (color === 'cyan') {
                         const parsed = parseMarkerName(notes);
                         if (parsed && parsed.type === 'action') {
@@ -303,7 +308,7 @@
                             };
                         }
                     }
-                    // Lemon/lime markers (TagOff activation)
+                    // Handle lemon/lime markers (TagOff activation)
                     else if (color === 'lemon' || color === 'lime') {
                         const tagOffKeys = Object.keys(pendingMarkers).filter(k => k.startsWith('tagOff-'));
                         if (tagOffKeys.length > 0) {
@@ -338,6 +343,7 @@
                     }
                 });
 
+                // Handle unmatched markers
                 Object.values(pendingMarkers).forEach(marker => {
                     timestamps.push({
                         id: Date.now().toString() + Math.random(),
@@ -355,7 +361,7 @@
                     });
                 });
 
-                console.log('Parsed ' + timestamps.length + ' timestamps');
+                console.log('Parsed timestamps: ' + timestamps.length);
                 console.log('Axes found: ' + Array.from(axesFound).join(', '));
 
                 return {
@@ -411,7 +417,16 @@
                 );
 
                 if (validTimestamps.length === 0) {
-                    return { min: 0, max: 0, avg: 0, total: 0, passed: 0, failed: 0, passRate: 0 };
+                    return {
+                        min: 0,
+                        max: 0,
+                        avg: 0,
+                        total: 0,
+                        passed: 0,
+                        failed: 0,
+                        passRate: 0,
+                        errorCount: axisTimestamps.filter(ts => ts.isError).length
+                    };
                 }
 
                 const values = validTimestamps.map(ts => ts.latencyMs);
@@ -433,10 +448,12 @@
                 }
 
                 const passRate = validTimestamps.length > 0 ? (passed / validTimestamps.length) * 100 : 0;
+                const errorCount = axisTimestamps.filter(ts => ts.isError).length;
 
-                return { min, max, avg, total: validTimestamps.length, passed, failed, passRate };
+                return { min, max, avg, total: validTimestamps.length, passed, failed, passRate, errorCount };
             }
 
+            // Group by axis
             const groupByAxis = (timestamps) => {
                 const groups = {};
                 timestamps.forEach(ts => {
@@ -449,14 +466,41 @@
                 return groups;
             };
 
-            // Create structures
+            // Icon component (simplified emojis)
+            const Icon = ({ name }) => {
+                const icons = {
+                    'plus': '➕',
+                    'trash-2': '🗑️',
+                    'download': '⬇️',
+                    'upload': '⬆️',
+                    'edit': '✏️',
+                    'save': '💾',
+                    'x': '❌',
+                    'check': '✅',
+                    'bar-chart': '📊',
+                    'settings': '⚙️',
+                    'file-text': '📄',
+                    'eye': '👁️',
+                    'eye-off': '👁️‍🗨️'
+                };
+                return <span>{icons[name] || '•'}</span>;
+            };
+
+            // Create new test case
             const createNewTestCase = () => ({
                 id: Date.now().toString(),
                 name: 'Test Case ' + (testCases.length + 1),
                 metadata: {},
-                executions: []
+                distances: {}, // Manual distance input per axis
+                executions: [{
+                    id: Date.now().toString() + '_exec',
+                    name: 'Execution 1',
+                    timestamps: [],
+                    notes: ''
+                }]
             });
 
+            // Create new execution
             const createNewExecution = (testCase) => ({
                 id: Date.now().toString() + '_exec',
                 name: 'Execution ' + (testCase.executions.length + 1),
@@ -542,10 +586,11 @@
                 e.target.value = '';
             };
 
-            // Export
+            // Export to JSON
             const handleExportJSON = () => {
                 const data = {
                     testCases,
+                    globalRequirements,
                     exportDate: new Date().toISOString()
                 };
 
@@ -619,7 +664,7 @@
 
             // Delete test case
             const deleteTestCase = (testCaseId) => {
-                if (!confirm('Delete this test case?')) return;
+                if (!confirm('Delete this test case? This cannot be undone.')) return;
 
                 const updated = testCases.filter(tc => tc.id !== testCaseId);
                 setTestCases(updated);
@@ -644,109 +689,291 @@
                     return tc;
                 });
                 setTestCases(updated);
-
-                if (activeExecution === executionId) {
-                    const tc = updated.find(t => t.id === testCaseId);
-                    setActiveExecution(tc && tc.executions.length > 0 ? tc.executions[0].id : null);
-                }
             };
 
-            // Update execution requirements
-            const updateExecutionRequirements = (field, value) => {
-                const updated = testCases.map(tc => {
-                    if (tc.id === activeTestCase) {
-                        return {
-                            ...tc,
-                            executions: tc.executions.map(ex => {
-                                if (ex.id === activeExecution) {
-                                    return {
-                                        ...ex,
-                                        requirements: {
-                                            ...ex.requirements,
-                                            [field]: value
-                                        }
-                                    };
-                                }
-                                return ex;
-                            })
-                        };
-                    }
-                    return tc;
-                });
-                setTestCases(updated);
-            };
-
-            // Update distance
-            const updateDistance = (axisKey, distance) => {
-                const updated = testCases.map(tc => {
-                    if (tc.id === activeTestCase) {
-                        return {
-                            ...tc,
-                            executions: tc.executions.map(ex => {
-                                if (ex.id === activeExecution) {
-                                    return {
-                                        ...ex,
-                                        distances: {
-                                            ...ex.distances,
-                                            [axisKey]: parseFloat(distance) || null
-                                        }
-                                    };
-                                }
-                                return ex;
-                            })
-                        };
-                    }
-                    return tc;
-                });
-                setTestCases(updated);
-            };
-
-            // Add to comparison
-            const addToComparison = (testCaseId, executionId) => {
-                const key = testCaseId + '_' + executionId;
-                if (!comparisonExecutions.find(c => c.key === key)) {
-                    const tc = testCases.find(t => t.id === testCaseId);
-                    const ex = tc?.executions.find(e => e.id === executionId);
-
-                    if (tc && ex) {
-                        setComparisonExecutions([...comparisonExecutions, {
-                            key,
-                            testCaseName: tc.name,
-                            executionName: ex.name,
-                            testCaseId,
-                            executionId,
-                            execution: ex
-                        }]);
-                    }
-                }
-            };
-
-            // Remove from comparison
-            const removeFromComparison = (key) => {
-                setComparisonExecutions(comparisonExecutions.filter(c => c.key !== key));
-            };
-
-            // Get current objects
+            // Get current test case and execution
             const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
             const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
 
-            // Render execution view
+            // Requirements Settings View
+            const renderRequirementsView = () => (
+                <div className="p-6 max-w-4xl">
+                    <h2 className="text-2xl font-bold mb-6">Requirements Settings</h2>
+
+                    <div className="bg-white rounded-lg shadow p-6 mb-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <label className="text-lg font-semibold">Enable Requirements Checking</label>
+                            <input
+                                type="checkbox"
+                                checked={globalRequirements.enabled}
+                                onChange={(e) => setGlobalRequirements({
+                                    ...globalRequirements,
+                                    enabled: e.target.checked
+                                })}
+                                className="w-5 h-5"
+                            />
+                        </div>
+
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium mb-2">
+                                Maximum Latency (milliseconds)
+                            </label>
+                            <input
+                                type="number"
+                                value={globalRequirements.maxLatency}
+                                onChange={(e) => setGlobalRequirements({
+                                    ...globalRequirements,
+                                    maxLatency: parseFloat(e.target.value) || 100
+                                })}
+                                className="w-full px-3 py-2 border rounded"
+                                disabled={!globalRequirements.enabled}
+                            />
+                        </div>
+
+                        <h3 className="text-lg font-semibold mb-4">Range Requirements (mm)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'].map(axis => (
+                                <div key={axis} className="border rounded p-4">
+                                    <h4 className="font-semibold mb-2">{axis}</h4>
+                                    <div className="space-y-2">
+                                        <div>
+                                            <label className="block text-sm mb-1">Min Must Respond</label>
+                                            <input
+                                                type="number"
+                                                value={globalRequirements.ranges[axis].minRespond}
+                                                onChange={(e) => setGlobalRequirements({
+                                                    ...globalRequirements,
+                                                    ranges: {
+                                                        ...globalRequirements.ranges,
+                                                        [axis]: {
+                                                            ...globalRequirements.ranges[axis],
+                                                            minRespond: parseFloat(e.target.value) || 0
+                                                        }
+                                                    }
+                                                })}
+                                                className="w-full px-2 py-1 border rounded"
+                                                disabled={!globalRequirements.enabled}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm mb-1">Must NOT Respond Beyond</label>
+                                            <input
+                                                type="number"
+                                                value={globalRequirements.ranges[axis].mustNotRespond}
+                                                onChange={(e) => setGlobalRequirements({
+                                                    ...globalRequirements,
+                                                    ranges: {
+                                                        ...globalRequirements.ranges,
+                                                        [axis]: {
+                                                            ...globalRequirements.ranges[axis],
+                                                            mustNotRespond: parseFloat(e.target.value) || 0
+                                                        }
+                                                    }
+                                                })}
+                                                className="w-full px-2 py-1 border rounded"
+                                                disabled={!globalRequirements.enabled}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <button
+                        onClick={() => setView('execution')}
+                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                    >
+                        Back to Execution View
+                    </button>
+                </div>
+            );
+
+            // Test Report View
+            const renderReportView = () => {
+                const selectedTests = testCases.filter(tc =>
+                    selectedForReport.includes(tc.id)
+                );
+
+                return (
+                    <div className="p-6">
+                        <div className="no-print mb-6 flex justify-between items-center">
+                            <h2 className="text-2xl font-bold">Test Report</h2>
+                            <div className="space-x-2">
+                                <button
+                                    onClick={() => window.print()}
+                                    className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                                >
+                                    <Icon name="download" /> Print/Export PDF
+                                </button>
+                                <button
+                                    onClick={() => setView('execution')}
+                                    className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+                                >
+                                    Back
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <div className="text-center mb-8">
+                                <h1 className="text-3xl font-bold mb-2">Hardware Latency Test Report</h1>
+                                <p className="text-gray-600">Generated: {new Date().toLocaleString()}</p>
+                            </div>
+
+                            {selectedTests.length === 0 ? (
+                                <div className="text-center py-12 text-gray-500">
+                                    <p>No test cases selected for report.</p>
+                                    <p className="text-sm mt-2">Select test cases in the execution view to include them in the report.</p>
+                                </div>
+                            ) : (
+                                selectedTests.map(tc => {
+                                    const allTimestamps = tc.executions.flatMap(ex => ex.timestamps);
+                                    const overallStats = getStatistics(allTimestamps);
+                                    const axisList = [...new Set(allTimestamps
+                                        .filter(ts => ts.axis && ts.direction)
+                                        .map(ts => ts.axis + ts.direction)
+                                    )];
+
+                                    return (
+                                        <div key={tc.id} className="mb-12 page-break-after">
+                                            <h2 className="text-2xl font-bold mb-4 border-b pb-2">{tc.name}</h2>
+
+                                            {/* Test Information */}
+                                            <div className="mb-6">
+                                                <h3 className="text-lg font-semibold mb-2">Test Information</h3>
+                                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                                    <div>
+                                                        <span className="font-medium">AB Number:</span> {tc.metadata.abNumber || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Tag Version:</span> {tc.metadata.tagVersion || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Total Executions:</span> {tc.executions.length}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Total Measurements:</span> {allTimestamps.filter(ts => !ts.isError).length}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Tested Distances */}
+                                            {tc.distances && Object.keys(tc.distances).length > 0 && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-2">Tested Distances</h3>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {Object.entries(tc.distances).map(([axis, distance]) => (
+                                                            <span key={axis} className="px-3 py-1 bg-blue-100 rounded">
+                                                                {axis}: {distance}mm
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Overall Statistics */}
+                                            <div className="mb-6">
+                                                <h3 className="text-lg font-semibold mb-2">Overall Statistics</h3>
+                                                <div className="grid grid-cols-4 gap-4 text-center">
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-green-600">
+                                                            {formatMsToTime(overallStats.min)}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Minimum</div>
+                                                    </div>
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-blue-600">
+                                                            {formatMsToTime(overallStats.avg)}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Average</div>
+                                                    </div>
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-red-600">
+                                                            {formatMsToTime(overallStats.max)}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Maximum</div>
+                                                    </div>
+                                                    <div className="border rounded p-3">
+                                                        <div className="text-2xl font-bold text-gray-600">
+                                                            {overallStats.total}
+                                                        </div>
+                                                        <div className="text-sm text-gray-600">Count</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Per-Axis Breakdown */}
+                                            <div className="mb-6">
+                                                <h3 className="text-lg font-semibold mb-2">Per-Axis Breakdown</h3>
+                                                <table className="w-full text-sm">
+                                                    <thead className="bg-gray-50">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left">Axis</th>
+                                                            <th className="px-4 py-2 text-right">Min</th>
+                                                            <th className="px-4 py-2 text-right">Avg</th>
+                                                            <th className="px-4 py-2 text-right">Max</th>
+                                                            <th className="px-4 py-2 text-right">Count</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {axisList.map(axisKey => {
+                                                            const axis = axisKey[0];
+                                                            const direction = axisKey[1];
+                                                            const stats = getAxisStatistics(allTimestamps, axis, direction, globalRequirements);
+
+                                                            return (
+                                                                <tr key={axisKey} className="border-t">
+                                                                    <td className="px-4 py-2 font-medium">{axisKey}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(stats.min)}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(stats.avg)}</td>
+                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(stats.max)}</td>
+                                                                    <td className="px-4 py-2 text-right">{stats.total}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            {/* Requirements Check */}
+                                            {globalRequirements.enabled && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-2">Requirements Check</h3>
+                                                    <div className="text-sm">
+                                                        <p><span className="font-medium">Maximum Latency:</span> {globalRequirements.maxLatency}ms</p>
+                                                        <p className="mt-2">
+                                                            <span className={overallStats.max <= globalRequirements.maxLatency ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}>
+                                                                {overallStats.max <= globalRequirements.maxLatency ? '✅ PASS' : '❌ FAIL'}
+                                                            </span>
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            // Execution View
             const renderExecutionView = () => {
                 if (!currentTestCase || !currentExecution) {
                     return (
-                        <div className="flex items-center justify-center h-full p-12">
+                        <div className="flex items-center justify-center h-full">
                             <div className="text-center">
-                                <p className="text-gray-500 text-lg mb-4">No test case or execution loaded</p>
+                                <p className="text-gray-500 text-lg mb-4">No test case loaded</p>
                                 <button
                                     onClick={() => {
                                         const newTC = createNewTestCase();
-                                        const newEx = createNewExecution(newTC);
-                                        newTC.executions.push(newEx);
                                         setTestCases([...testCases, newTC]);
                                         setActiveTestCase(newTC.id);
-                                        setActiveExecution(newEx.id);
+                                        setActiveExecution(newTC.executions[0].id);
                                     }}
-                                    className="px-6 py-3 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                                 >
                                     <Icon name="plus" /> Create New Test Case
                                 </button>
@@ -756,12 +983,11 @@
                 }
 
                 const timestamps = currentExecution.timestamps;
-                const requirements = currentExecution.requirements;
-                const overallStats = getStatistics(timestamps, requirements);
+                const overallStats = getStatistics(timestamps);
                 const axisGroups = groupByAxis(timestamps);
-
-                // Error grouping
                 const errorEvents = timestamps.filter(ts => ts.isError);
+
+                // Group errors by error number
                 const errorsByNumber = {};
                 errorEvents.forEach(err => {
                     if (err.errorNumber) {
@@ -774,59 +1000,42 @@
 
                 return (
                     <div className="p-6">
-                        {/* Test Specifications */}
+                        {/* Test Case Header */}
                         <div className="bg-white rounded-lg shadow p-4 mb-4">
-                            <h3 className="font-semibold mb-3">Test Specifications</h3>
-                            <div className="grid grid-cols-2 gap-4 text-sm">
-                                <div>
-                                    <span className="text-gray-600">Test Case:</span>
-                                    <span className="ml-2 font-medium">{currentTestCase.name}</span>
+                            <div className="flex items-center justify-between">
+                                <div className="flex-1">
+                                    <input
+                                        type="text"
+                                        value={currentTestCase.name}
+                                        onChange={(e) => updateTestCaseName(currentTestCase.id, e.target.value)}
+                                        className="text-xl font-bold border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none px-2 py-1"
+                                    />
                                 </div>
-                                <div>
-                                    <span className="text-gray-600">Execution:</span>
-                                    <span className="ml-2 font-medium">{currentExecution.name}</span>
+                                <div className="flex space-x-2">
+                                    <button
+                                        onClick={() => {
+                                            setSelectedForReport(prev =>
+                                                prev.includes(currentTestCase.id)
+                                                    ? prev.filter(id => id !== currentTestCase.id)
+                                                    : [...prev, currentTestCase.id]
+                                            );
+                                        }}
+                                        className={`px-3 py-1 rounded ${
+                                            selectedForReport.includes(currentTestCase.id)
+                                                ? 'bg-green-600 text-white'
+                                                : 'bg-gray-200 text-gray-700'
+                                        }`}
+                                    >
+                                        <Icon name={selectedForReport.includes(currentTestCase.id) ? 'check' : 'eye'} />
+                                        {selectedForReport.includes(currentTestCase.id) ? 'In Report' : 'Add to Report'}
+                                    </button>
+                                    <button
+                                        onClick={() => deleteTestCase(currentTestCase.id)}
+                                        className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                                    >
+                                        <Icon name="trash-2" /> Delete Test Case
+                                    </button>
                                 </div>
-                                <div>
-                                    <span className="text-gray-600">AB Number:</span>
-                                    <span className="ml-2 font-medium">{currentTestCase.metadata?.abNumber || 'N/A'}</span>
-                                </div>
-                                <div>
-                                    <span className="text-gray-600">Tag Version:</span>
-                                    <span className="ml-2 font-medium">{currentTestCase.metadata?.tagVersion || 'N/A'}</span>
-                                </div>
-                            </div>
-
-                            {/* Tested Distances */}
-                            {currentExecution.distances && Object.keys(currentExecution.distances).length > 0 && (
-                                <div className="mt-3">
-                                    <div className="text-sm text-gray-600 mb-1">Tested Distances from Face:</div>
-                                    <div className="flex flex-wrap gap-2">
-                                        {Object.entries(currentExecution.distances).map(([axis, dist]) => (
-                                            dist !== null && (
-                                                <span key={axis} className="px-3 py-1 bg-blue-100 rounded text-sm">
-                                                    {axis}: {dist}mm
-                                                </span>
-                                            )
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Pass/Fail Criteria */}
-                            <div className="mt-3 border-t pt-3">
-                                <div className="text-sm font-medium mb-2">
-                                    Pass/Fail Criteria:
-                                    <span className={`ml-2 ${requirements.enabled ? 'text-green-600' : 'text-gray-400'}`}>
-                                        {requirements.enabled ? '✓ Enabled' : '✗ Disabled'}
-                                    </span>
-                                </div>
-                                {requirements.enabled && (
-                                    <div className="text-xs text-gray-600">
-                                        Max Latency: {requirements.maxLatency}ms |
-                                        Min Respond: X:{requirements.minRespondRanges.X}mm Y:{requirements.minRespondRanges.Y}mm Z:{requirements.minRespondRanges.Z}mm |
-                                        Must NOT: X:{requirements.mustNotRespondRanges.X}mm Y:{requirements.mustNotRespondRanges.Y}mm Z:{requirements.mustNotRespondRanges.Z}mm
-                                    </div>
-                                )}
                             </div>
                         </div>
 
@@ -839,8 +1048,8 @@
                                         <label className="block text-sm mb-1">{axisKey}</label>
                                         <input
                                             type="number"
-                                            value={currentExecution.distances?.[axisKey] || ''}
-                                            onChange={(e) => updateDistance(axisKey, e.target.value)}
+                                            value={currentTestCase.distances?.[axisKey] || ''}
+                                            onChange={(e) => updateAxisDistance(axisKey[0], axisKey[1], e.target.value)}
                                             placeholder="mm"
                                             className="w-full px-2 py-1 border rounded text-sm"
                                         />
@@ -1337,6 +1546,7 @@
                             </div>
                         </div>
 
+                        {/* Navigation */}
                         <div className="px-6 flex space-x-1 border-t border-blue-500">
                             <button
                                 onClick={() => setView('execution')}
