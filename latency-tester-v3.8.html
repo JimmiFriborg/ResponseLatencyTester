@@ -453,17 +453,39 @@
                 return { min, max, avg, total: validTimestamps.length, passed, failed, passRate, errorCount };
             }
 
+            const UNGROUPED_BUCKET = 'Ungrouped';
+
             // Group by axis
             const groupByAxis = (timestamps) => {
                 const groups = {};
+                const insertionOrder = [];
+                const ungrouped = [];
+
                 timestamps.forEach(ts => {
+                    if (ts.isError) return;
+
                     if (ts.axis && ts.direction) {
                         const key = ts.axis + ts.direction;
-                        if (!groups[key]) groups[key] = [];
+                        if (!groups[key]) {
+                            groups[key] = [];
+                            insertionOrder.push(key);
+                        }
                         groups[key].push(ts);
+                    } else {
+                        ungrouped.push(ts);
                     }
                 });
-                return groups;
+
+                const orderedGroups = {};
+                insertionOrder.forEach(key => {
+                    orderedGroups[key] = groups[key];
+                });
+
+                if (ungrouped.length > 0) {
+                    orderedGroups[UNGROUPED_BUCKET] = ungrouped;
+                }
+
+                return orderedGroups;
             };
 
             // Icon component (simplified emojis)
@@ -619,6 +641,32 @@
                                             }
                                             return ts;
                                         })
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                });
+                setTestCases(updated);
+            };
+
+            // Update axis/direction assignments
+            const updateTimestampAxisDirection = (timestampId, newAxis, newDirection) => {
+                const updated = testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        timestamps: ex.timestamps.map(ts =>
+                                            ts.id === timestampId
+                                                ? { ...ts, axis: newAxis, direction: newDirection }
+                                                : ts
+                                        )
                                     };
                                 }
                                 return ex;
@@ -985,6 +1033,7 @@
                 const timestamps = currentExecution.timestamps;
                 const overallStats = getStatistics(timestamps);
                 const axisGroups = groupByAxis(timestamps);
+                const ungroupedCount = timestamps.filter(ts => !ts.isError && (!ts.axis || !ts.direction)).length;
                 const errorEvents = timestamps.filter(ts => ts.isError);
 
                 // Group errors by error number
@@ -1038,6 +1087,17 @@
                                 </div>
                             </div>
                         </div>
+
+                        {ungroupedCount > 0 && (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                                <div className="text-sm font-semibold text-yellow-800">
+                                    Import summary alert
+                                </div>
+                                <p className="text-xs md:text-sm text-yellow-700 mt-1">
+                                    This import contains <span className="font-semibold">{ungroupedCount}</span> marker{ungroupedCount !== 1 ? 's' : ''} without axis/direction tags. Use the Ungrouped bucket below to assign an axis and direction so they appear in the correct sections.
+                                </p>
+                            </div>
+                        )}
 
                         {/* Manual Distance Input */}
                         <div className="bg-white rounded-lg shadow p-4 mb-4">
@@ -1176,20 +1236,30 @@
                             // Separate tables per axis
                             <div className="space-y-4">
                                 {Object.entries(axisGroups).map(([axisKey, axisTimestamps]) => {
-                                    const axis = axisKey[0];
-                                    const direction = axisKey[1];
-                                    const axisStats = getAxisStatistics(axisTimestamps, axis, direction, requirements);
-                                    const distance = currentExecution.distances?.[axisKey];
+                                    const isUngrouped = axisKey === UNGROUPED_BUCKET;
+                                    const axis = isUngrouped ? null : axisKey[0];
+                                    const direction = isUngrouped ? null : axisKey[1];
+                                    const axisStats = isUngrouped
+                                        ? getStatistics(axisTimestamps, requirements)
+                                        : getAxisStatistics(axisTimestamps, axis, direction, requirements);
+                                    const distance = !isUngrouped ? currentExecution.distances?.[axisKey] : null;
 
                                     return (
                                         <div key={axisKey} className="bg-white rounded-lg shadow overflow-hidden">
                                             <div className="p-4 bg-gray-50 border-b">
-                                                <div className="flex items-center justify-between">
-                                                    <div>
-                                                        <h3 className="font-semibold">
+                                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                                    <div className="flex items-center flex-wrap gap-2">
+                                                        <h3 className="font-semibold flex items-center gap-2">
                                                             {axisKey}
-                                                            {distance && <span className="text-sm text-gray-600 ml-2">({distance}mm)</span>}
+                                                            {!isUngrouped && distance && (
+                                                                <span className="text-sm text-gray-600">({distance}mm)</span>
+                                                            )}
                                                         </h3>
+                                                        {isUngrouped && (
+                                                            <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">
+                                                                ⚠️ Needs axis tags
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div className="text-sm text-gray-600">
                                                         Min: {formatMsToTime(axisStats.min)} |
@@ -1211,6 +1281,12 @@
                                                             <th className="px-4 py-2 text-left">Time (s)</th>
                                                             <th className="px-4 py-2 text-left">Timecode</th>
                                                             <th className="px-4 py-2 text-left">Label</th>
+                                                            {isUngrouped && (
+                                                                <>
+                                                                    <th className="px-4 py-2 text-left">Axis</th>
+                                                                    <th className="px-4 py-2 text-left">Direction</th>
+                                                                </>
+                                                            )}
                                                             <th className="px-4 py-2 text-left">Note</th>
                                                             <th className="px-4 py-2 text-right">Latency</th>
                                                             <th className="px-4 py-2 text-center">Actions</th>
@@ -1246,6 +1322,33 @@
                                                                             {ts.label}
                                                                         </span>
                                                                     </td>
+                                                                    {isUngrouped && (
+                                                                        <>
+                                                                            <td className="px-4 py-2">
+                                                                                <select
+                                                                                    value={ts.axis || ''}
+                                                                                    onChange={(e) => updateTimestampAxisDirection(ts.id, e.target.value || '', ts.direction || '')}
+                                                                                    className="w-full border rounded px-2 py-1 text-xs"
+                                                                                >
+                                                                                    <option value="">Select axis</option>
+                                                                                    {['X', 'Y', 'Z'].map(axisOption => (
+                                                                                        <option key={axisOption} value={axisOption}>{axisOption}</option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            </td>
+                                                                            <td className="px-4 py-2">
+                                                                                <select
+                                                                                    value={ts.direction || ''}
+                                                                                    onChange={(e) => updateTimestampAxisDirection(ts.id, ts.axis || '', e.target.value || '')}
+                                                                                    className="w-full border rounded px-2 py-1 text-xs"
+                                                                                >
+                                                                                    <option value="">Select direction</option>
+                                                                                    <option value="+">+</option>
+                                                                                    <option value="-">-</option>
+                                                                                </select>
+                                                                            </td>
+                                                                        </>
+                                                                    )}
                                                                     <td className="px-4 py-2 text-xs max-w-xs truncate" title={ts.note}>{ts.note}</td>
                                                                     <td className="px-4 py-2 text-right font-mono font-bold">{ts.latency || '-'}</td>
                                                                     <td className="px-4 py-2 text-center">
@@ -1483,9 +1586,12 @@
                                                     </thead>
                                                     <tbody>
                                                         {Object.keys(axisGroups).map(axisKey => {
-                                                            const axis = axisKey[0];
-                                                            const direction = axisKey[1];
-                                                            const axisStats = getAxisStatistics(axisGroups[axisKey], axis, direction, ex.requirements);
+                                                            const isUngrouped = axisKey === UNGROUPED_BUCKET;
+                                                            const axis = isUngrouped ? null : axisKey[0];
+                                                            const direction = isUngrouped ? null : axisKey[1];
+                                                            const axisStats = isUngrouped
+                                                                ? getStatistics(axisGroups[axisKey], ex.requirements)
+                                                                : getAxisStatistics(axisGroups[axisKey], axis, direction, ex.requirements);
 
                                                             return (
                                                                 <tr key={axisKey} className="border-t">
