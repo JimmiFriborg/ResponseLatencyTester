@@ -17,15 +17,27 @@ def main():
     
     # Get the directory where this script is located
     script_dir = Path(__file__).parent.absolute()
-    html_file = script_dir / "latency-tester-portable.html"
-    
-    # Check if the HTML file exists
-    if not html_file.exists():
-        print(f"Error: {html_file.name} not found!")
-        print("Please ensure the HTML file is in the same directory as this script.")
+
+    preferred_files = [
+        "latency-tester-v3.8.html",
+        "latency-tester-portable.html"
+    ]
+
+    html_file = None
+    for filename in preferred_files:
+        candidate = script_dir / filename
+        if candidate.exists():
+            html_file = candidate
+            break
+
+    if html_file is None:
+        print("Error: No latency tester HTML file found!")
+        print("Please ensure one of the following files exists in this directory:")
+        for filename in preferred_files:
+            print(f"  - {filename}")
         input("\nPress Enter to exit...")
         sys.exit(1)
-    
+
     print("Starting latency tester in your default browser...")
     print()
     
