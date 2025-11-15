@@ -1,5 +1,33 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Download, Upload, Plus, Trash2, Copy, Check, X, AlertCircle, FileText, BarChart3, Settings, Save, FolderOpen, Eye, EyeOff, ChevronDown, ChevronUp, HardDrive, Cloud } from 'lucide-react';
+import { Download, Upload, Plus, Trash2, Copy, Check, X, AlertCircle, FileText, BarChart3, Settings, Save, FolderOpen, Eye, EyeOff, ChevronDown, ChevronUp, HardDrive, Cloud, Info } from 'lucide-react';
+
+const APP_SCHEMA_VERSION = 2;
+
+const BUILT_IN_TIMESTAMP_TEMPLATES = [
+  {
+    id: 'builtin-tag-motion-baseline',
+    name: 'Tag → Motion Baseline',
+    description: 'Covers TagOff through MotionSettle for a single axis movement',
+    entries: [
+      { label: 'TagOff', stage: 'Tag Off', axis: '', direction: '' },
+      { label: 'MotionStart', stage: 'Motion Start', axis: 'X', direction: '+' },
+      { label: 'MotionPeak', stage: 'Motion Peak', axis: 'X', direction: '+' },
+      { label: 'MotionSettle', stage: 'Motion Settle', axis: 'X', direction: '+' }
+    ],
+    readOnly: true
+  },
+  {
+    id: 'builtin-audio-visual-sync',
+    name: 'Audio ↔ Visual Sync',
+    description: 'Tracks the relationship between audio and visual cues',
+    entries: [
+      { label: 'VisualCue', stage: 'Visual Cue Appears', axis: '', direction: '' },
+      { label: 'AudioCue', stage: 'Audio Cue Plays', axis: '', direction: '' },
+      { label: 'ValidationPass', stage: 'Validation Check', axis: '', direction: '' }
+    ],
+    readOnly: true
+  }
+];
 
 const DEFAULT_ENVIRONMENT = {
   modelSKU: '',
@@ -46,6 +74,18 @@ const DEFAULT_TIMESTAMP = {
 
 const AXIS_OPTIONS = ['', 'X', 'Y', 'Z'];
 const DIRECTION_OPTIONS = ['', '+', '-'];
+const LABEL_OPTIONS = [
+  'TagOff',
+  'TagOn',
+  'MotionStart',
+  'MotionPeak',
+  'MotionSettle',
+  'AudioCue',
+  'VisualCue',
+  'ValidationPass',
+  'ValidationFail',
+  'Error'
+];
 
 const LatencyTester = () => {
   // State Management with localStorage persistence
@@ -58,6 +98,10 @@ const LatencyTester = () => {
   const [autoSave, setAutoSave] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [storageAvailable, setStorageAvailable] = useState(true);
+  const [timestampTemplates, setTimestampTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    BUILT_IN_TIMESTAMP_TEMPLATES[0]?.id || null
+  );
   const fileInputRef = useRef(null);
 
   // Check if localStorage is available
@@ -79,14 +123,16 @@ const LatencyTester = () => {
     activeExecution: 'latencyTester_activeExecution',
     comparisonSets: 'latencyTester_comparisonSets',
     view: 'latencyTester_view',
-    autoSave: 'latencyTester_autoSave'
+    autoSave: 'latencyTester_autoSave',
+    timestampTemplates: 'latencyTester_timestampTemplates',
+    schemaVersion: 'latencyTester_schemaVersion'
   };
 
   // Load data from localStorage on mount
   useEffect(() => {
     const isStorageAvailable = checkStorageAvailable();
     setStorageAvailable(isStorageAvailable);
-    
+
     const loadFromStorage = () => {
       if (!isStorageAvailable) {
         // Initialize with default if no storage
@@ -94,6 +140,8 @@ const LatencyTester = () => {
         setTestCases([defaultTestCase]);
         setActiveTestCase(defaultTestCase.id);
         setActiveExecution(defaultTestCase.executions[0].id);
+        setTimestampTemplates([]);
+        setSelectedTemplateId(BUILT_IN_TIMESTAMP_TEMPLATES[0]?.id || null);
         setDataLoaded(true);
         return;
       }
@@ -106,31 +154,50 @@ const LatencyTester = () => {
         const savedComparisonSets = localStorage.getItem(STORAGE_KEYS.comparisonSets);
         const savedView = localStorage.getItem(STORAGE_KEYS.view);
         const savedAutoSave = localStorage.getItem(STORAGE_KEYS.autoSave);
+        const savedTemplates = localStorage.getItem(STORAGE_KEYS.timestampTemplates);
+        const savedSchemaVersion = localStorage.getItem(STORAGE_KEYS.schemaVersion);
+
+        const parsedSchemaVersion = Number.parseInt(savedSchemaVersion || '1', 10);
+        const schemaVersion = Number.isFinite(parsedSchemaVersion) ? parsedSchemaVersion : 1;
+
+        if (savedTemplates) {
+          try {
+            const parsedTemplates = JSON.parse(savedTemplates)
+              .map(normalizeTemplate)
+              .filter(template => !template.readOnly);
+            setTimestampTemplates(parsedTemplates);
+          } catch (error) {
+            console.warn('Failed to parse saved timestamp templates, using defaults.', error);
+            setTimestampTemplates([]);
+          }
+        }
 
         if (savedTestCases) {
-          const parsedTestCases = JSON.parse(savedTestCases).map(normalizeTestCase);
+          const rawTestCases = JSON.parse(savedTestCases);
+          const migratedTestCases = migrateTestCases(rawTestCases, schemaVersion);
+          const parsedTestCases = migratedTestCases.map(normalizeTestCase);
           setTestCases(parsedTestCases);
-          
+
           if (savedActiveTestCase) {
             setActiveTestCase(savedActiveTestCase);
           }
-          
+
           if (savedActiveExecution) {
             setActiveExecution(savedActiveExecution);
           }
-          
+
           if (savedComparisonSets) {
             setComparisonSets(JSON.parse(savedComparisonSets));
           }
-          
+
           if (savedView) {
             setView(savedView);
           }
-          
+
           if (savedAutoSave !== null) {
             setAutoSave(JSON.parse(savedAutoSave));
           }
-          
+
           setLastSaved(new Date());
           setDataLoaded(true);
         } else {
@@ -155,6 +222,21 @@ const LatencyTester = () => {
     loadFromStorage();
   }, []);
 
+  useEffect(() => {
+    const availableTemplates = [...BUILT_IN_TIMESTAMP_TEMPLATES, ...timestampTemplates];
+    if (availableTemplates.length === 0) {
+      setSelectedTemplateId(null);
+      return;
+    }
+
+    setSelectedTemplateId(prev => {
+      if (prev && availableTemplates.some(template => template.id === prev)) {
+        return prev;
+      }
+      return availableTemplates[0].id;
+    });
+  }, [timestampTemplates]);
+
   // Auto-save to localStorage when data changes
   useEffect(() => {
     if (autoSave && testCases.length > 0 && storageAvailable && dataLoaded) {
@@ -166,6 +248,11 @@ const LatencyTester = () => {
           localStorage.setItem(STORAGE_KEYS.comparisonSets, JSON.stringify(comparisonSets));
           localStorage.setItem(STORAGE_KEYS.view, view);
           localStorage.setItem(STORAGE_KEYS.autoSave, JSON.stringify(autoSave));
+          localStorage.setItem(
+            STORAGE_KEYS.timestampTemplates,
+            JSON.stringify(timestampTemplates.filter(template => !template.readOnly))
+          );
+          localStorage.setItem(STORAGE_KEYS.schemaVersion, APP_SCHEMA_VERSION.toString());
           setLastSaved(new Date());
         } catch (error) {
           console.error('Error saving to localStorage:', error);
@@ -176,7 +263,7 @@ const LatencyTester = () => {
       const timeoutId = setTimeout(saveToStorage, 500); // Debounce saves
       return () => clearTimeout(timeoutId);
     }
-  }, [testCases, activeTestCase, activeExecution, comparisonSets, view, autoSave, storageAvailable, dataLoaded]);
+  }, [testCases, activeTestCase, activeExecution, comparisonSets, view, autoSave, storageAvailable, dataLoaded, timestampTemplates]);
 
   // Helper Functions
   function createNewTestCase() {
@@ -208,6 +295,39 @@ const LatencyTester = () => {
     return {
       id: Date.now().toString() + Math.random(),
       ...DEFAULT_TIMESTAMP
+    };
+  }
+
+  function createNewTemplate() {
+    return {
+      id: `template-${Date.now().toString()}`,
+      name: 'Custom Template',
+      description: '',
+      entries: [
+        {
+          label: DEFAULT_TIMESTAMP.label,
+          stage: '',
+          axis: '',
+          direction: ''
+        }
+      ]
+    };
+  }
+
+  function normalizeTemplate(template = {}) {
+    const entries = (template.entries || []).map(entry => ({
+      label: LABEL_OPTIONS.includes(entry.label) ? entry.label : DEFAULT_TIMESTAMP.label,
+      stage: entry.stage || '',
+      axis: (entry.axis || '').toUpperCase().replace(/[^XYZ]/g, '').slice(0, 1),
+      direction: entry.direction === '+' || entry.direction === '-' ? entry.direction : ''
+    }));
+
+    return {
+      id: template.id || `template-${Date.now().toString()}`,
+      name: template.name || 'Custom Template',
+      description: template.description || '',
+      entries: entries.length > 0 ? entries : createNewTemplate().entries,
+      readOnly: Boolean(template.readOnly)
     };
   }
 
@@ -277,6 +397,26 @@ const LatencyTester = () => {
       executions: normalizedExecutions,
       createdAt: testCase.createdAt || new Date().toISOString()
     };
+  }
+
+  function migrateTestCases(testCases = [], storedVersion = APP_SCHEMA_VERSION) {
+    let migrated = Array.isArray(testCases) ? [...testCases] : [];
+
+    if (storedVersion < 2) {
+      migrated = migrated.map(testCase => ({
+        ...testCase,
+        executions: (testCase.executions || []).map(execution => ({
+          ...execution,
+          timestamps: (execution.timestamps || []).map(timestamp => ({
+            axis: '',
+            direction: '',
+            ...timestamp
+          }))
+        }))
+      }));
+    }
+
+    return migrated;
   }
 
   function parseTimeToMs(timeStr) {
@@ -408,7 +548,7 @@ const LatencyTester = () => {
   // Event Handlers
   const handleAddTimestamp = () => {
     if (!currentExecution) return;
-    
+
     const newTimestamp = createNewTimestamp();
     const updatedTestCases = testCases.map(tc => {
       if (tc.id === activeTestCase) {
@@ -425,6 +565,138 @@ const LatencyTester = () => {
       return tc;
     });
     setTestCases(updatedTestCases);
+  };
+
+  const handleApplyTemplate = (templateId) => {
+    if (!templateId || !currentExecution) return;
+
+    const template = [...BUILT_IN_TIMESTAMP_TEMPLATES, ...timestampTemplates]
+      .find(item => item.id === templateId);
+
+    if (!template) return;
+
+    const templateTimestamps = template.entries.map(entry => ({
+      id: Date.now().toString() + Math.random(),
+      ...normalizeTimestamp(entry)
+    }));
+
+    const updatedTestCases = testCases.map(tc => {
+      if (tc.id === activeTestCase) {
+        return {
+          ...tc,
+          executions: tc.executions.map(ex => {
+            if (ex.id === activeExecution) {
+              const shouldReplace = ex.timestamps.length === 0;
+              return {
+                ...ex,
+                timestamps: shouldReplace
+                  ? templateTimestamps
+                  : [...ex.timestamps, ...templateTimestamps]
+              };
+            }
+            return ex;
+          })
+        };
+      }
+      return tc;
+    });
+
+    setTestCases(updatedTestCases);
+  };
+
+  const handleCreateTemplate = () => {
+    const newTemplate = createNewTemplate();
+    setTimestampTemplates([...timestampTemplates, newTemplate]);
+    setSelectedTemplateId(newTemplate.id);
+  };
+
+  const handleDeleteTemplate = (templateId) => {
+    setTimestampTemplates(timestampTemplates.filter(template => template.id !== templateId));
+  };
+
+  const handleTemplateFieldChange = (templateId, field, value) => {
+    setTimestampTemplates(timestampTemplates.map(template => {
+      if (template.id === templateId) {
+        return {
+          ...template,
+          [field]: value
+        };
+      }
+      return template;
+    }));
+  };
+
+  const handleTemplateEntryChange = (templateId, index, field, value) => {
+    setTimestampTemplates(timestampTemplates.map(template => {
+      if (template.id === templateId) {
+        const entries = template.entries.map((entry, entryIndex) => {
+          if (entryIndex === index) {
+            if (field === 'axis') {
+              return {
+                ...entry,
+                axis: value.toUpperCase().replace(/[^XYZ]/g, '').slice(0, 1)
+              };
+            }
+            if (field === 'direction') {
+              return {
+                ...entry,
+                direction: value === '+' || value === '-' ? value : ''
+              };
+            }
+            if (field === 'label') {
+              return {
+                ...entry,
+                label: LABEL_OPTIONS.includes(value) ? value : entry.label
+              };
+            }
+            return {
+              ...entry,
+              [field]: value
+            };
+          }
+          return entry;
+        });
+
+        return {
+          ...template,
+          entries
+        };
+      }
+      return template;
+    }));
+  };
+
+  const handleAddTemplateEntry = (templateId) => {
+    setTimestampTemplates(timestampTemplates.map(template => {
+      if (template.id === templateId) {
+        return {
+          ...template,
+          entries: [
+            ...template.entries,
+            {
+              label: DEFAULT_TIMESTAMP.label,
+              stage: '',
+              axis: '',
+              direction: ''
+            }
+          ]
+        };
+      }
+      return template;
+    }));
+  };
+
+  const handleRemoveTemplateEntry = (templateId, index) => {
+    setTimestampTemplates(timestampTemplates.map(template => {
+      if (template.id === templateId) {
+        const entries = template.entries.filter((_, entryIndex) => entryIndex !== index);
+        return {
+          ...template,
+          entries: entries.length > 0 ? entries : template.entries
+        };
+      }
+      return template;
+    }));
   };
 
   const handleTimestampChange = (timestampId, field, value) => {
@@ -551,6 +823,12 @@ const LatencyTester = () => {
       localStorage.setItem(STORAGE_KEYS.activeExecution, activeExecution || '');
       localStorage.setItem(STORAGE_KEYS.comparisonSets, JSON.stringify(comparisonSets));
       localStorage.setItem(STORAGE_KEYS.view, view);
+      localStorage.setItem(
+        STORAGE_KEYS.timestampTemplates,
+        JSON.stringify(timestampTemplates.filter(template => !template.readOnly))
+      );
+      localStorage.setItem(STORAGE_KEYS.autoSave, JSON.stringify(autoSave));
+      localStorage.setItem(STORAGE_KEYS.schemaVersion, APP_SCHEMA_VERSION.toString());
       setLastSaved(new Date());
     } catch (error) {
       console.error('Error saving:', error);
@@ -573,6 +851,8 @@ const LatencyTester = () => {
       setComparisonSets([]);
       setView('execution');
       setLastSaved(null);
+      setTimestampTemplates([]);
+      setSelectedTemplateId(BUILT_IN_TIMESTAMP_TEMPLATES[0]?.id || null);
     }
   };
 
@@ -631,7 +911,7 @@ const LatencyTester = () => {
   // Render Functions
   const renderExecutionView = () => {
     if (!currentExecution) return <div>No execution selected</div>;
-    
+
     const latencies = calculateLatencies(currentExecution.timestamps);
     const stats = getStatistics(latencies);
     const activeRequirements = getActiveRequirements(currentTestCase, currentExecution);
@@ -649,6 +929,8 @@ const LatencyTester = () => {
     const axisRangeEntries = activeRequirements?.axisRanges
       ? Object.entries(activeRequirements.axisRanges).filter(([, range]) => range.min !== '' || range.max !== '')
       : [];
+    const availableTemplates = [...BUILT_IN_TIMESTAMP_TEMPLATES, ...timestampTemplates];
+    const selectedTemplate = availableTemplates.find(template => template.id === selectedTemplateId) || null;
 
     return (
       <div className="space-y-6">
@@ -841,17 +1123,50 @@ const LatencyTester = () => {
 
         {/* Timestamps Table */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-4">
             <h3 className="text-lg font-semibold">Timestamps</h3>
-            <button
-              onClick={handleAddTimestamp}
-              className="px-3 py-1.5 bg-blue-500 text-white rounded-md hover:bg-blue-600 flex items-center gap-1"
-            >
-              <Plus className="w-4 h-4" />
-              Add Timestamp
-            </button>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedTemplateId || ''}
+                  onChange={(e) => setSelectedTemplateId(e.target.value || null)}
+                  className="px-2 py-1 text-sm border rounded"
+                >
+                  {availableTemplates.length === 0 && (
+                    <option value="">No Templates</option>
+                  )}
+                  {availableTemplates.map(template => (
+                    <option key={template.id} value={template.id}>
+                      {template.readOnly ? 'Preset: ' : ''}{template.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => handleApplyTemplate(selectedTemplateId)}
+                  disabled={!selectedTemplate || !currentExecution}
+                  className={`px-3 py-1.5 rounded-md flex items-center gap-1 ${selectedTemplate ? 'bg-indigo-500 text-white hover:bg-indigo-600' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                >
+                  <Copy className="w-4 h-4" />
+                  Apply Template
+                </button>
+              </div>
+              <button
+                onClick={handleAddTimestamp}
+                className="px-3 py-1.5 bg-blue-500 text-white rounded-md hover:bg-blue-600 flex items-center gap-1"
+              >
+                <Plus className="w-4 h-4" />
+                Add Timestamp
+              </button>
+            </div>
           </div>
-          
+
+          {selectedTemplate?.description && (
+            <div className="mb-3 text-xs text-gray-500 flex items-center gap-1">
+              <Info className="w-3.5 h-3.5" />
+              {selectedTemplate.description}
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -897,9 +1212,9 @@ const LatencyTester = () => {
                           onChange={(e) => handleTimestampChange(timestamp.id, 'label', e.target.value)}
                           className="w-full px-2 py-1 text-sm border rounded"
                         >
-                          <option value="TagOn">TagOn</option>
-                          <option value="TagOff">TagOff</option>
-                          <option value="Error">Error</option>
+                          {LABEL_OPTIONS.map(option => (
+                            <option key={option} value={option}>{option}</option>
+                          ))}
                         </select>
                       </td>
                       <td className="py-2 px-2">
@@ -1580,6 +1895,153 @@ const LatencyTester = () => {
               }}
               className="w-full px-3 py-2 border rounded-md min-h-[80px]"
             />
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-xl font-semibold">Timestamp Templates</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Configure reusable marker sequences. Templates can be applied to executions to accelerate data entry and ensure consistent stage coverage.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCreateTemplate}
+              className="px-3 py-1.5 bg-blue-500 text-white rounded-md hover:bg-blue-600 flex items-center gap-1"
+            >
+              <Plus className="w-4 h-4" />
+              New Template
+            </button>
+          </div>
+        </div>
+
+        {timestampTemplates.length === 0 && (
+          <div className="p-3 rounded-md bg-blue-50 border border-blue-100 text-sm text-blue-700">
+            No custom templates yet. Start with "New Template" or use a built-in preset from the execution view.
+          </div>
+        )}
+
+        <div className="space-y-6">
+          {timestampTemplates.map(template => (
+            <div key={template.id} className="border border-gray-200 rounded-lg">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 border-b border-gray-200 bg-gray-50">
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    value={template.name}
+                    onChange={(e) => handleTemplateFieldChange(template.id, 'name', e.target.value)}
+                    className="w-full px-3 py-2 border rounded-md text-sm font-medium"
+                    placeholder="Template name"
+                  />
+                  <textarea
+                    value={template.description}
+                    onChange={(e) => handleTemplateFieldChange(template.id, 'description', e.target.value)}
+                    className="w-full px-3 py-2 border rounded-md text-sm mt-2"
+                    placeholder="Optional description"
+                    rows={2}
+                  />
+                </div>
+                <button
+                  onClick={() => handleDeleteTemplate(template.id)}
+                  className="self-start px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-md flex items-center gap-1"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Remove
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                {template.entries.map((entry, index) => (
+                  <div key={index} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Label</label>
+                      <select
+                        value={entry.label}
+                        onChange={(e) => handleTemplateEntryChange(template.id, index, 'label', e.target.value)}
+                        className="w-full px-2 py-1 border rounded text-sm"
+                      >
+                        {LABEL_OPTIONS.map(option => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Stage</label>
+                      <input
+                        type="text"
+                        value={entry.stage}
+                        onChange={(e) => handleTemplateEntryChange(template.id, index, 'stage', e.target.value)}
+                        className="w-full px-2 py-1 border rounded text-sm"
+                        placeholder="Describe the event"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Axis</label>
+                      <select
+                        value={entry.axis}
+                        onChange={(e) => handleTemplateEntryChange(template.id, index, 'axis', e.target.value)}
+                        className="w-full px-2 py-1 border rounded text-sm"
+                      >
+                        {AXIS_OPTIONS.map(option => (
+                          <option key={option} value={option}>{option === '' ? '—' : option}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Direction</label>
+                      <select
+                        value={entry.direction}
+                        onChange={(e) => handleTemplateEntryChange(template.id, index, 'direction', e.target.value)}
+                        className="w-full px-2 py-1 border rounded text-sm"
+                      >
+                        {DIRECTION_OPTIONS.map(option => (
+                          <option key={option} value={option}>{option === '' ? '—' : option}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => handleRemoveTemplateEntry(template.id, index)}
+                        className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md flex items-center gap-1"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        Remove Stage
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  onClick={() => handleAddTemplateEntry(template.id)}
+                  className="px-3 py-1.5 bg-indigo-500 text-white rounded-md hover:bg-indigo-600 flex items-center gap-1"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Stage
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Built-in Presets</h3>
+          <div className="grid gap-3 md:grid-cols-2">
+            {BUILT_IN_TIMESTAMP_TEMPLATES.map(template => (
+              <div key={template.id} className="border border-dashed border-gray-300 rounded-lg p-3 bg-gray-50">
+                <div className="text-sm font-medium text-gray-800">{template.name}</div>
+                <div className="text-xs text-gray-500 mt-1">{template.description}</div>
+                <div className="mt-2 flex flex-wrap gap-1 text-xs text-gray-600">
+                  {template.entries.map((entry, index) => (
+                    <span key={`${template.id}-${index}`} className="px-2 py-0.5 bg-white border border-gray-200 rounded">
+                      {entry.label}{entry.axis ? ` · ${entry.axis}${entry.direction || ''}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
