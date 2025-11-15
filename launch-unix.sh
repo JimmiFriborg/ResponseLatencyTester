@@ -12,12 +12,26 @@ echo ""
 
 # Get the directory where this script is located
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-HTML_FILE="$DIR/latency-tester-portable.html"
 
-# Check if the HTML file exists
-if [ ! -f "$HTML_FILE" ]; then
-    echo "Error: latency-tester-portable.html not found!"
-    echo "Please ensure the HTML file is in the same directory as this script."
+PREFERRED_FILES=(
+    "latency-tester-v3.8.html"
+    "latency-tester-portable.html"
+)
+
+HTML_FILE=""
+for file in "${PREFERRED_FILES[@]}"; do
+    if [ -f "$DIR/$file" ]; then
+        HTML_FILE="$DIR/$file"
+        break
+    fi
+done
+
+if [ -z "$HTML_FILE" ]; then
+    echo "Error: Could not find a latency tester HTML file."
+    echo "Please ensure one of the following files is in this directory:"
+    for file in "${PREFERRED_FILES[@]}"; do
+        echo "  - $file"
+    done
     exit 1
 fi
 
@@ -29,7 +43,7 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
     elif command -v gnome-open > /dev/null; then
         gnome-open "$HTML_FILE"
     else
-        echo "Please open latency-tester-portable.html manually in your browser"
+        echo "Please open $HTML_FILE manually in your browser"
     fi
 elif [[ "$OSTYPE" == "darwin"* ]]; then
     # Mac OSX
@@ -39,7 +53,7 @@ elif [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]]; then
     start "$HTML_FILE"
 else
     echo "Unknown OS type: $OSTYPE"
-    echo "Please open latency-tester-portable.html manually in your browser"
+    echo "Please open $HTML_FILE manually in your browser"
 fi
 
 echo ""

@@ -94,6 +94,9 @@ const LatencyTester = () => {
   const [activeExecution, setActiveExecution] = useState(null);
   const [view, setView] = useState('execution'); // execution, comparison, settings
   const [comparisonSets, setComparisonSets] = useState([]);
+  const [availableComparisonAxes, setAvailableComparisonAxes] = useState([]);
+  const [selectedComparisonAxes, setSelectedComparisonAxes] = useState([]);
+  const [comparisonAxisExpanded, setComparisonAxisExpanded] = useState({});
   const [lastSaved, setLastSaved] = useState(null);
   const [autoSave, setAutoSave] = useState(true);
   const [dataLoaded, setDataLoaded] = useState(false);
@@ -221,6 +224,41 @@ const LatencyTester = () => {
 
     loadFromStorage();
   }, []);
+
+  useEffect(() => {
+    const axisSet = new Set();
+
+    comparisonSets.forEach(set => {
+      if (!set?.execution?.timestamps) return;
+      const latencies = calculateLatencies(set.execution.timestamps);
+      const grouped = groupByAxis(latencies);
+      Object.keys(grouped).forEach(axisKey => axisSet.add(axisKey));
+    });
+
+    const axisList = Array.from(axisSet).sort((a, b) => a.localeCompare(b));
+    setAvailableComparisonAxes(axisList);
+    setSelectedComparisonAxes(prev => {
+      if (axisList.length === 0) {
+        return [];
+      }
+
+      if (prev.length === 0) {
+        return [...axisList];
+      }
+
+      const sanitized = prev.filter(axis => axisList.includes(axis));
+
+      if (sanitized.length === 0) {
+        return [...axisList];
+      }
+
+      if (sanitized.length === prev.length) {
+        return prev;
+      }
+
+      return sanitized;
+    });
+  }, [comparisonSets]);
 
   useEffect(() => {
     const availableTemplates = [...BUILT_IN_TIMESTAMP_TEMPLATES, ...timestampTemplates];
@@ -502,6 +540,42 @@ const LatencyTester = () => {
     return `${axis}${direction || ''}`;
   }
 
+  function groupByAxis(latencies) {
+    return latencies.reduce((acc, latency) => {
+      const axisKey = formatAxisKey(latency.axis, latency.direction);
+      if (!acc[axisKey]) {
+        acc[axisKey] = [];
+      }
+      acc[axisKey].push(latency);
+      return acc;
+    }, {});
+  }
+
+  function getAxisStatistics(latencies, requirements) {
+    const stats = getStatistics(latencies);
+    const count = latencies.length;
+    let passRate = null;
+    let passesRequirement = null;
+
+    if (
+      requirements?.enabled &&
+      typeof requirements.maxLatency === 'number' &&
+      !Number.isNaN(requirements.maxLatency) &&
+      count > 0
+    ) {
+      const passes = latencies.filter(item => item.value <= requirements.maxLatency).length;
+      passRate = (passes / count) * 100;
+      passesRequirement = passes === count;
+    }
+
+    return {
+      stats,
+      count,
+      passRate,
+      passesRequirement
+    };
+  }
+
   function humanizeLabel(key) {
     if (!key) return '';
     return key
@@ -511,31 +585,11 @@ const LatencyTester = () => {
   }
 
   function getAxisSummary(latencies, requirements) {
-    const axisGroups = {};
-
-    latencies.forEach(latency => {
-      const axisKey = formatAxisKey(latency.axis, latency.direction);
-      if (!axisGroups[axisKey]) {
-        axisGroups[axisKey] = [];
-      }
-      axisGroups[axisKey].push(latency);
-    });
+    const axisGroups = groupByAxis(latencies);
 
     const summary = {};
     Object.entries(axisGroups).forEach(([axisKey, items]) => {
-      const stats = getStatistics(items);
-      let passRate = null;
-
-      if (requirements?.enabled && typeof requirements.maxLatency === 'number' && !Number.isNaN(requirements.maxLatency)) {
-        const passes = items.filter(item => item.value <= requirements.maxLatency).length;
-        passRate = items.length > 0 ? (passes / items.length) * 100 : null;
-      }
-
-      summary[axisKey] = {
-        stats,
-        count: items.length,
-        passRate
-      };
+      summary[axisKey] = getAxisStatistics(items, requirements);
     });
 
     return summary;
@@ -546,6 +600,42 @@ const LatencyTester = () => {
   const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
 
   // Event Handlers
+  const handleComparisonAxisToggle = (axisKey) => {
+    setSelectedComparisonAxes(prev => {
+      if (availableComparisonAxes.length === 0) {
+        return [];
+      }
+
+      const active = prev.length === 0 ? availableComparisonAxes : prev;
+      const isSelected = active.includes(axisKey);
+      let nextSelection = isSelected
+        ? active.filter(axis => axis !== axisKey)
+        : [...active, axisKey];
+
+      if (nextSelection.length === 0) {
+        nextSelection = availableComparisonAxes;
+      }
+
+      return nextSelection;
+    });
+  };
+
+  const handleAxisSectionToggle = (executionId, axisKey) => {
+    setComparisonAxisExpanded(prev => {
+      const expandedForExecution = new Set(prev[executionId] || []);
+      if (expandedForExecution.has(axisKey)) {
+        expandedForExecution.delete(axisKey);
+      } else {
+        expandedForExecution.add(axisKey);
+      }
+
+      return {
+        ...prev,
+        [executionId]: Array.from(expandedForExecution)
+      };
+    });
+  };
+
   const handleAddTimestamp = () => {
     if (!currentExecution) return;
 
@@ -1359,11 +1449,48 @@ const LatencyTester = () => {
   };
 
   const renderComparisonView = () => {
+    const axisFilterSet = new Set(
+      selectedComparisonAxes.length > 0 ? selectedComparisonAxes : availableComparisonAxes
+    );
+
     return (
       <div className="space-y-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
           <h2 className="text-xl font-semibold mb-4">Test Comparison</h2>
-          
+
+          <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border border-blue-100 rounded-md p-3 mb-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-gray-600">Axis Filter:</span>
+              {availableComparisonAxes.length === 0 ? (
+                <span className="text-xs text-gray-500">No axis data available yet.</span>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {availableComparisonAxes.map(axis => {
+                      const isSelected = axisFilterSet.has(axis);
+                      return (
+                        <button
+                          key={axis}
+                          onClick={() => handleComparisonAxisToggle(axis)}
+                          className={`px-3 py-1 rounded-full border text-xs font-medium transition-colors ${isSelected ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-300'}`}
+                        >
+                          {axis}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setSelectedComparisonAxes([...availableComparisonAxes])}
+                    className="ml-auto text-xs font-medium text-blue-600 hover:text-blue-800"
+                    disabled={availableComparisonAxes.length === 0}
+                  >
+                    Show All
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
           {comparisonSets.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               <BarChart3 className="w-12 h-12 mx-auto mb-3 text-gray-300" />
@@ -1459,11 +1586,11 @@ const LatencyTester = () => {
                         const latencies = calculateLatencies(set.execution.timestamps);
                         return getStatistics(latencies);
                       });
-                      
+
                       const minMin = Math.min(...allStats.map(s => s.min));
                       const maxMax = Math.max(...allStats.map(s => s.max));
                       const avgAvg = allStats.reduce((sum, s) => sum + s.avg, 0) / allStats.length;
-                      
+
                       return (
                         <>
                           <div className="p-3 bg-blue-50 rounded-lg">
@@ -1493,6 +1620,118 @@ const LatencyTester = () => {
                         </>
                       );
                     })()}
+                  </div>
+                </div>
+              )}
+
+              {comparisonSets.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-medium mb-3">Axis Breakdown</h3>
+                  <div className="space-y-4">
+                    {comparisonSets.map(set => {
+                      const latencies = calculateLatencies(set.execution.timestamps);
+                      const stats = getStatistics(latencies);
+                      const requirement = getActiveRequirements({ requirements: set.requirements }, set.execution);
+                      const axisGroups = groupByAxis(latencies);
+                      const axisEntries = Object.entries(axisGroups)
+                        .filter(([axisKey]) => (axisFilterSet.size === 0 ? true : axisFilterSet.has(axisKey)))
+                        .sort((a, b) => a[0].localeCompare(b[0]));
+                      const expandedAxes = new Set(comparisonAxisExpanded[set.executionId] || []);
+
+                      return (
+                        <div key={set.executionId} className="border border-gray-200 rounded-lg overflow-hidden">
+                          <div className="p-4 bg-gray-50 border-b border-gray-200">
+                            <div className="flex flex-wrap justify-between gap-2 items-center">
+                              <div>
+                                <div className="font-medium text-gray-900">{set.executionName}</div>
+                                <div className="text-xs text-gray-500">{set.testCaseName}</div>
+                              </div>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-xs">
+                                <div>
+                                  <div className="text-gray-500">Min</div>
+                                  <div className="text-blue-600 font-semibold">{formatMsToTime(stats.min)}</div>
+                                </div>
+                                <div>
+                                  <div className="text-gray-500">Avg</div>
+                                  <div className="text-green-600 font-semibold">{formatMsToTime(stats.avg)}</div>
+                                </div>
+                                <div>
+                                  <div className="text-gray-500">Max</div>
+                                  <div className="text-orange-600 font-semibold">{formatMsToTime(stats.max)}</div>
+                                </div>
+                                <div>
+                                  <div className="text-gray-500">Events</div>
+                                  <div className="text-gray-800 font-semibold">{latencies.length}</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="p-4 space-y-3">
+                            {axisEntries.length === 0 ? (
+                              <p className="text-sm text-gray-500">No axis data matches the current filter.</p>
+                            ) : (
+                              axisEntries.map(([axisKey, items]) => {
+                                const axisData = getAxisStatistics(items, requirement);
+                                const isExpanded = expandedAxes.has(axisKey);
+                                const passRateLabel = axisData.passRate !== null ? `${axisData.passRate.toFixed(1)}%` : '—';
+
+                                return (
+                                  <div key={axisKey} className="border border-gray-200 rounded-md">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAxisSectionToggle(set.executionId, axisKey)}
+                                      className="w-full flex flex-col gap-2 text-left px-4 py-3 bg-white hover:bg-gray-50"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-medium text-gray-900">{axisKey}</span>
+                                        {axisData.passRate !== null && (
+                                          axisData.passesRequirement ? (
+                                            <Check className="w-4 h-4 text-green-500" />
+                                          ) : (
+                                            <X className="w-4 h-4 text-red-500" />
+                                          )
+                                        )}
+                                        <span className="ml-auto text-gray-400">
+                                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                        </span>
+                                      </div>
+                                      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs text-gray-600">
+                                        <div>
+                                          <span className="text-gray-500">Events:</span> {axisData.count}
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-500">Min:</span> {formatMsToTime(axisData.stats.min)}
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-500">Avg:</span> {formatMsToTime(axisData.stats.avg)}
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-500">Max:</span> {formatMsToTime(axisData.stats.max)}
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-500">Pass Rate:</span> {passRateLabel}
+                                        </div>
+                                      </div>
+                                    </button>
+                                    {isExpanded && (
+                                      <div className="px-4 pb-4 text-xs text-gray-600 space-y-1 bg-gray-50 border-t border-gray-100">
+                                        {items.map((item, idx) => (
+                                          <div key={idx} className="flex justify-between gap-4">
+                                            <span>{item.from.label} → {item.to.label}</span>
+                                            <span className="font-medium text-gray-900">{formatMsToTime(item.value)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
