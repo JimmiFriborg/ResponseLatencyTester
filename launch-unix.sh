@@ -14,6 +14,7 @@ echo ""
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 PREFERRED_FILES=(
+    "latency-tester-v3.8.1.html"
     "latency-tester-v3.8.html"
     "latency-tester-portable.html"
 )

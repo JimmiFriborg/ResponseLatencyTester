@@ -2,11 +2,26 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="refresh" content="0; url=latency-tester-v3.8.1.html">
-    <title>Hardware Latency Tester v3.8 – Redirected</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardware Latency Tester v3.8.1</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
     <style>
-        body { font-family: system-ui, sans-serif; padding: 2rem; background: #f4f4f5; color: #111827; }
-        a { color: #2563eb; }
+        .row-pass { background-color: rgba(34, 197, 94, 0.1); }
+        .row-fail { background-color: rgba(239, 68, 68, 0.1); }
+        .row-error { background-color: rgba(251, 191, 36, 0.1); }
+        .row-excluded { background-color: rgba(156, 163, 175, 0.1); }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white; }
+        }
     </style>
 </head>
 <body>
@@ -992,8 +1007,8 @@
                 }));
             };
 
-            const deleteExecution = (executionId) => {
-                const tc = testCases.find(item => item.id === activeTestCase);
+            const deleteExecution = (executionId, targetTestCaseId = activeTestCase) => {
+                const tc = testCases.find(item => item.id === targetTestCaseId);
                 if (!tc) return;
                 if (tc.executions.length === 1) {
                     alert('A test case must have at least one execution. Add another before deleting this one.');
@@ -1002,12 +1017,14 @@
                 if (!confirm('Delete this execution? This cannot be undone.')) return;
 
                 const updatedExecutions = tc.executions.filter(ex => ex.id !== executionId);
-                const nextActive = updatedExecutions[0]?.id;
                 const updatedTestCases = testCases.map(item =>
                     item.id === tc.id ? { ...item, executions: updatedExecutions } : item
                 );
                 setTestCases(updatedTestCases);
-                setActiveExecution(nextActive || updatedExecutions[0]?.id || null);
+
+                if (targetTestCaseId === activeTestCase) {
+                    setActiveExecution(updatedExecutions[0]?.id || null);
+                }
             };
 
             // Toggle marker inclusion
@@ -1108,21 +1125,7 @@
                 }
             };
 
-            // Delete execution
-            const deleteExecution = (testCaseId, executionId) => {
-                if (!confirm('Delete this execution?')) return;
-
-                const updated = testCases.map(tc => {
-                    if (tc.id === testCaseId) {
-                        return {
-                            ...tc,
-                            executions: tc.executions.filter(ex => ex.id !== executionId)
-                        };
-                    }
-                    return tc;
-                });
-                setTestCases(updated);
-            };
+            
 
             const updateExecutionRequirements = (field, value) => {
                 if (!activeTestCase || !activeExecution) return;
@@ -2374,7 +2377,6 @@
                                 })}
                             </div>
                         </div>
-                    </div>
                 );
             };
 
@@ -2574,7 +2576,7 @@
                             <div className="flex items-center justify-between">
                                 <div>
                                     <h1 className="text-2xl font-bold">Hardware Latency Tester</h1>
-                                    <p className="text-blue-100 text-sm">v3.8 - Professional Edition</p>
+                                    <p className="text-blue-100 text-sm">v3.8.1 - Professional Edition</p>
                                 </div>
                                 <div className="flex space-x-2">
                                     <button

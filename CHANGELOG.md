@@ -8,6 +8,11 @@ This document captures the functional evolution of the Hardware Latency Tester f
 - Comparison intelligence calls out requirement sources, pass/fail outcomes, and per-axis deltas so reviewers can reconcile multiple executions quickly (`v4.0-release-notes.md`).
 - Architecture/plan documents detail the upcoming media engine, marker management, pattern recognition, and export upgrades (video/waveform sync, WaveSurfer integration, template-based detection, FFmpeg.wasm packaging, etc.) as captured in `v4.0-architecture.md`.
 
+## [v3.8.1] - Professional Edition Patch 1
+- Fixes the duplicate execution-deletion helper and stray closing tags that prevented `latency-tester-v3.8.html` from loading in modern browsers. The deduped helper now accepts an optional test-case override so execution CRUD continues to work from any context.
+- Produces a dedicated `latency-tester-v3.8.1.html` build (with matching UI copy) plus a redirecting `latency-tester-v3.8.html` shim so bookmarks continue to resolve after the patch upgrade.
+- Updates documentation, launch scripts, and release notes to call out the patched build and the changelog entry that were missing from the original 3.8 drop.
+
 ## [v3.8] - Professional Edition
 - Rebuilt UI with execution, requirements, and report views, providing CSV parsing with FPS auto-detection, manual per-axis distances, requirements management, error grouping, and printable reports (`v3.8-release-notes.md`).
 - Adds include/exclude toggles, inline editing for test cases, and report selection workflows to streamline day-to-day work (`v3.8-release-notes.md`).
