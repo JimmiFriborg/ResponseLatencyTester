@@ -49,7 +49,7 @@
                     'plus': '➕', 'trash-2': '🗑️', 'download': '⬇️', 'upload': '⬆️',
                     'edit': '✏️', 'save': '💾', 'x': '❌', 'check': '✅',
                     'bar-chart': '📊', 'settings': '⚙️', 'file-text': '📄',
-                    'eye': '👁️', 'git-compare': '🔄'
+                    'eye': '👁️', 'eye-off': '👁️‍🗨️', 'git-compare': '🔄'
                 };
                 return <span>{icons[name] || '•'}</span>;
             };
@@ -487,26 +487,6 @@
                 }
 
                 return orderedGroups;
-            };
-
-            // Icon component (simplified emojis)
-            const Icon = ({ name }) => {
-                const icons = {
-                    'plus': '➕',
-                    'trash-2': '🗑️',
-                    'download': '⬇️',
-                    'upload': '⬆️',
-                    'edit': '✏️',
-                    'save': '💾',
-                    'x': '❌',
-                    'check': '✅',
-                    'bar-chart': '📊',
-                    'settings': '⚙️',
-                    'file-text': '📄',
-                    'eye': '👁️',
-                    'eye-off': '👁️‍🗨️'
-                };
-                return <span>{icons[name] || '•'}</span>;
             };
 
             // Create new test case
