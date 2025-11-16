@@ -1,0 +1,31 @@
+# Changelog
+
+This document captures the functional evolution of the Hardware Latency Tester family of builds that ship inside this repository.
+
+## [v4.0] - Planned
+- Introduces per-event axis capture plus axis performance dashboards in execution and comparison views, allowing every direction to be benchmarked without grouping constraints (see `v4.0-release-notes.md`).
+- Stores dedicated hardware assignments and requirement profiles per test case, keeping firmware, accessory, and threshold context with the exported data (`v4.0-release-notes.md`).
+- Comparison intelligence calls out requirement sources, pass/fail outcomes, and per-axis deltas so reviewers can reconcile multiple executions quickly (`v4.0-release-notes.md`).
+- Architecture/plan documents detail the upcoming media engine, marker management, pattern recognition, and export upgrades (video/waveform sync, WaveSurfer integration, template-based detection, FFmpeg.wasm packaging, etc.) as captured in `v4.0-architecture.md`.
+
+## [v3.8] - Professional Edition
+- Rebuilt UI with execution, requirements, and report views, providing CSV parsing with FPS auto-detection, manual per-axis distances, requirements management, error grouping, and printable reports (`v3.8-release-notes.md`).
+- Adds include/exclude toggles, inline editing for test cases, and report selection workflows to streamline day-to-day work (`v3.8-release-notes.md`).
+- Maintains and extends v3.2/v3.4 capabilities: per-axis statistics, grouped views, flexible exports, original timecode displays, and distance detection now live alongside the new multi-view layout (`v3.2-release-notes.md`, `v3.4-release-notes.md`).
+- Requirements editor ensures the global pass/fail thresholds introduced in earlier versions are still enforced, satisfying the need for feature continuity from prior releases (`v3.8-release-notes.md`).
+
+## [v3.4] - Working Version
+- Fixed JSX loading issues, range display (now mm distances), and restored original timestamp visibility with detailed calculation explanations (`v3.4-release-notes.md`).
+- Enhanced statistics panel shows per-axis breakdowns with distance context plus comprehensive timestamp table columns and visual pass/fail indicators (`v3.4-release-notes.md`).
+- Import/export workflow highlights tested distances, axis-specific stats, and sample outputs for validation (`v3.4-release-notes.md`).
+
+## [v3.2] - Final Production Release
+- Axis grouping is default with enhanced statistics: overall min/avg/max/pass-fail plus detailed per-axis metrics and pass rates (`v3.2-release-notes.md`).
+- Export options expanded to JSON/CSV/PDF, ensuring downstream compatibility and re-import support (`v3.2-release-notes.md`).
+- Adds prominent test specification headers, timestamp calculation displays, strict statistics rules, and refined stage formatting for consistent reporting (`v3.2-release-notes.md`).
+
+## [v3.0] - Enhanced Features
+- Debuted column sorting, automatic error detection, axis-based grouping, and pass/fail highlighting controls for the DaVinci marker workflow (`v3-features-guide.md`).
+- Improved metadata parsing for marker names plus import workflow changes that flag unmatched markers and preserve axis context (`v3-features-guide.md`).
+- Delivered workflow tips, visual cues, and performance benefits that later versions build upon (`v3-features-guide.md`).
+
