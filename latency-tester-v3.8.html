@@ -39,6 +39,7 @@
             const [view, setView] = useState('execution'); // execution, comparison, report
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
             const [axisGroupingEnabled, setAxisGroupingEnabled] = useState(true);
+            const [selectedForReport, setSelectedForReport] = useState([]);
 
             const importRef = useRef(null);
 
@@ -882,6 +883,7 @@
                                         .filter(ts => ts.axis && ts.direction)
                                         .map(ts => ts.axis + ts.direction)
                                     )];
+                                    const axisGroups = groupByAxis(allTimestamps);
 
                                     return (
                                         <div key={tc.id} className="mb-12 page-break-after">
@@ -995,6 +997,133 @@
                                                                 {overallStats.max <= globalRequirements.maxLatency ? '✅ PASS' : '❌ FAIL'}
                                                             </span>
                                                         </p>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {Object.keys(axisGroups).length > 0 && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-4">Axis Execution Details</h3>
+                                                    <div className="space-y-6">
+                                                        {Object.entries(axisGroups).map(([axisKey, axisTimestamps]) => {
+                                                            const isUngrouped = axisKey === UNGROUPED_BUCKET;
+                                                            const axis = isUngrouped ? null : axisKey[0];
+                                                            const direction = isUngrouped ? null : axisKey[1];
+                                                            const axisStats = !isUngrouped
+                                                                ? getAxisStatistics(allTimestamps, axis, direction, globalRequirements)
+                                                                : getStatistics(axisTimestamps, globalRequirements);
+                                                            const axisDistance = !isUngrouped ? (tc.distances?.[axisKey] ?? null) : null;
+                                                            const requirementRange = !isUngrouped ? globalRequirements?.ranges?.[axisKey] : null;
+                                                            const axisErrorCount = allTimestamps.filter(ts => {
+                                                                if (isUngrouped) {
+                                                                    return (!ts.axis || !ts.direction) && ts.isError;
+                                                                }
+                                                                return ts.axis === axis && ts.direction === direction && ts.isError;
+                                                            }).length;
+
+                                                            const requirementsEnabled = globalRequirements?.enabled && !isUngrouped;
+                                                            let verdictLabel = 'Not evaluated';
+                                                            let verdictClass = 'text-gray-500';
+                                                            if (requirementsEnabled) {
+                                                                if (axisStats.total === 0) {
+                                                                    verdictLabel = 'No data';
+                                                                } else if (axisStats.failed > 0) {
+                                                                    verdictLabel = '❌ FAIL';
+                                                                    verdictClass = 'text-red-600 font-semibold';
+                                                                } else {
+                                                                    verdictLabel = '✅ PASS';
+                                                                    verdictClass = 'text-green-600 font-semibold';
+                                                                }
+                                                            }
+
+                                                            return (
+                                                                <div key={axisKey} className="border rounded-lg p-4">
+                                                                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 border-b pb-3 mb-3">
+                                                                        <div>
+                                                                            <div className="flex items-center gap-3 flex-wrap">
+                                                                                <h4 className="text-xl font-semibold">
+                                                                                    {isUngrouped ? 'Ungrouped Markers' : `Axis ${axisKey}`}
+                                                                                </h4>
+                                                                                {requirementsEnabled && (
+                                                                                    <span className={verdictClass}>{verdictLabel}</span>
+                                                                                )}
+                                                                                {axisErrorCount > 0 && (
+                                                                                    <span className="text-sm font-medium text-red-600">{axisErrorCount} error{axisErrorCount !== 1 ? 's' : ''}</span>
+                                                                                )}
+                                                                            </div>
+                                                                            <div className="text-sm text-gray-600 flex flex-wrap gap-4 mt-2">
+                                                                                {!isUngrouped && (
+                                                                                    <>
+                                                                                        <span>Distance: {axisDistance != null ? `${axisDistance}mm` : 'N/A'}</span>
+                                                                                        {globalRequirements?.maxLatency != null && (
+                                                                                            <span>Max Latency ≤ {globalRequirements.maxLatency}ms</span>
+                                                                                        )}
+                                                                                        {requirementRange && (
+                                                                                            <>
+                                                                                                <span>Min Respond ≥ {requirementRange.minRespond}mm</span>
+                                                                                                <span>Must NOT Respond &gt; {requirementRange.mustNotRespond}mm</span>
+                                                                                            </>
+                                                                                        )}
+                                                                                    </>
+                                                                                )}
+                                                                                {isUngrouped && (
+                                                                                    <span>Markers without axis/direction assignments.</span>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="text-sm text-gray-600">
+                                                                            <div>Measurements: {axisStats.total}</div>
+                                                                            {requirementsEnabled && (
+                                                                                <div>Pass: {axisStats.passed} · Fail: {axisStats.failed}</div>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="overflow-x-auto">
+                                                                        {axisTimestamps.length === 0 ? (
+                                                                            <p className="text-sm text-gray-500">No measurements recorded for this section.</p>
+                                                                        ) : (
+                                                                            <table className="w-full text-xs md:text-sm">
+                                                                                <thead className="bg-gray-50">
+                                                                                    <tr>
+                                                                                        <th className="px-3 py-2 text-left">Time (s)</th>
+                                                                                        <th className="px-3 py-2 text-left">Timecode</th>
+                                                                                        <th className="px-3 py-2 text-left">Label</th>
+                                                                                        {isUngrouped && (
+                                                                                            <>
+                                                                                                <th className="px-3 py-2 text-left">Axis</th>
+                                                                                                <th className="px-3 py-2 text-left">Direction</th>
+                                                                                            </>
+                                                                                        )}
+                                                                                        <th className="px-3 py-2 text-left">Note</th>
+                                                                                        <th className="px-3 py-2 text-right">Latency</th>
+                                                                                        <th className="px-3 py-2 text-left">Included?</th>
+                                                                                    </tr>
+                                                                                </thead>
+                                                                                <tbody>
+                                                                                    {axisTimestamps.map(ts => (
+                                                                                        <tr key={ts.id} className="border-t">
+                                                                                            <td className="px-3 py-2 font-mono">{ts.time || '-'}</td>
+                                                                                            <td className="px-3 py-2 font-mono text-xs">{ts.recordIn || '-'}</td>
+                                                                                            <td className="px-3 py-2">{ts.label}</td>
+                                                                                            {isUngrouped && (
+                                                                                                <>
+                                                                                                    <td className="px-3 py-2">{ts.axis || '-'}</td>
+                                                                                                    <td className="px-3 py-2">{ts.direction || '-'}</td>
+                                                                                                </>
+                                                                                            )}
+                                                                                            <td className="px-3 py-2 text-xs">{ts.note || '-'}</td>
+                                                                                            <td className="px-3 py-2 text-right font-mono">{ts.latency || '-'}</td>
+                                                                                            <td className="px-3 py-2">{ts.excludeFromStats ? 'No' : 'Yes'}</td>
+                                                                                        </tr>
+                                                                                    ))}
+                                                                                </tbody>
+                                                                            </table>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
                                                     </div>
                                                 </div>
                                             )}
@@ -1506,110 +1635,6 @@
                                     </div>
                                 );
                             })}
-                        </div>
-                    </div>
-                );
-            };
-
-            // Render report view
-            const renderReportView = () => {
-                return (
-                    <div className="p-6">
-                        <div className="no-print mb-6 flex justify-between items-center">
-                            <h2 className="text-2xl font-bold">Test Report</h2>
-                            <button
-                                onClick={() => window.print()}
-                                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                            >
-                                <Icon name="download" /> Print/Export PDF
-                            </button>
-                        </div>
-
-                        <div className="bg-white rounded-lg shadow p-6">
-                            <div className="text-center mb-8">
-                                <h1 className="text-3xl font-bold mb-2">Hardware Latency Test Report</h1>
-                                <p className="text-gray-600">Generated: {new Date().toLocaleString()}</p>
-                            </div>
-
-                            {testCases.map(tc => (
-                                <div key={tc.id} className="mb-12 page-break-after">
-                                    <h2 className="text-2xl font-bold mb-4 border-b pb-2">{tc.name}</h2>
-
-                                    {tc.executions.map(ex => {
-                                        const stats = getStatistics(ex.timestamps, ex.requirements);
-                                        const axisGroups = groupByAxis(ex.timestamps);
-
-                                        return (
-                                            <div key={ex.id} className="mb-8">
-                                                <h3 className="text-xl font-semibold mb-3">{ex.name}</h3>
-
-                                                <div className="mb-4">
-                                                    <div className="grid grid-cols-4 gap-4 text-center mb-4">
-                                                        <div className="border rounded p-3">
-                                                            <div className="text-xl font-bold text-green-600">{formatMsToTime(stats.min)}</div>
-                                                            <div className="text-sm text-gray-600">Minimum</div>
-                                                        </div>
-                                                        <div className="border rounded p-3">
-                                                            <div className="text-xl font-bold text-blue-600">{formatMsToTime(stats.avg)}</div>
-                                                            <div className="text-sm text-gray-600">Average</div>
-                                                        </div>
-                                                        <div className="border rounded p-3">
-                                                            <div className="text-xl font-bold text-red-600">{formatMsToTime(stats.max)}</div>
-                                                            <div className="text-sm text-gray-600">Maximum</div>
-                                                        </div>
-                                                        <div className="border rounded p-3">
-                                                            <div className="text-xl font-bold text-gray-600">{stats.total}</div>
-                                                            <div className="text-sm text-gray-600">Count</div>
-                                                        </div>
-                                                    </div>
-
-                                                    {ex.requirements.enabled && (
-                                                        <div className="text-center border-t pt-3">
-                                                            <div className="text-sm">
-                                                                Pass: <span className="text-green-600 font-bold">{stats.passed}</span> /
-                                                                Fail: <span className="text-red-600 font-bold">{stats.failed}</span>
-                                                                <span className="ml-2">({stats.passRate.toFixed(1)}% pass rate)</span>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-
-                                                <table className="w-full text-sm mb-4">
-                                                    <thead className="bg-gray-50">
-                                                        <tr>
-                                                            <th className="px-4 py-2 text-left">Axis</th>
-                                                            <th className="px-4 py-2 text-right">Min</th>
-                                                            <th className="px-4 py-2 text-right">Avg</th>
-                                                            <th className="px-4 py-2 text-right">Max</th>
-                                                            <th className="px-4 py-2 text-right">Count</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {Object.keys(axisGroups).map(axisKey => {
-                                                            const isUngrouped = axisKey === UNGROUPED_BUCKET;
-                                                            const axis = isUngrouped ? null : axisKey[0];
-                                                            const direction = isUngrouped ? null : axisKey[1];
-                                                            const axisStats = isUngrouped
-                                                                ? getStatistics(axisGroups[axisKey], ex.requirements)
-                                                                : getAxisStatistics(axisGroups[axisKey], axis, direction, ex.requirements);
-
-                                                            return (
-                                                                <tr key={axisKey} className="border-t">
-                                                                    <td className="px-4 py-2 font-medium">{axisKey}</td>
-                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(axisStats.min)}</td>
-                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(axisStats.avg)}</td>
-                                                                    <td className="px-4 py-2 text-right">{formatMsToTime(axisStats.max)}</td>
-                                                                    <td className="px-4 py-2 text-right">{axisStats.total}</td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            ))}
                         </div>
                     </div>
                 );
