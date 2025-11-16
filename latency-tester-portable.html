@@ -11,7 +11,7 @@
     <!-- React and Babel -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="./vendor/babel-standalone.min.js"></script>
     
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
@@ -43,6 +43,16 @@
 <body>
     <div id="root"></div>
     
+    <script>
+        if (!window.Babel) {
+            document.body.innerHTML = '<main style="font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; padding: 2rem; max-width: 640px; margin: auto;">'
+                + '<h1 style="font-size: 1.5rem; font-weight: 600; color: #111827;">Portable build failed to initialize</h1>'
+                + '<p style="margin-top: 1rem; color: #374151;">The embedded Babel runtime could not be loaded. '
+                + 'Please confirm that <code>vendor/babel-standalone.min.js</code> is present next to this HTML file and that your browser allows local scripts.</p>'
+                + '<p style="margin-top: 1rem; color: #374151;">If you received this file as an archive, re-extract all files to keep the directory structure intact.</p>'
+                + '</main>';
+        }
+    </script>
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
         
