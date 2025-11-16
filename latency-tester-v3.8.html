@@ -32,6 +32,25 @@
 
         const AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'];
         const AXES = ['X', 'Y', 'Z'];
+        const DISTANCE_AXES = ['X', 'Y', 'Z'];
+
+        const getDefaultEnvironment = () => ({
+            name: '',
+            location: '',
+            owner: '',
+            dut: '',
+            notes: ''
+        });
+
+        const createHardwareItem = () => ({
+            id: Date.now().toString() + Math.random(),
+            type: '',
+            version: '',
+            revision: '',
+            serialNumber: '',
+            name: '',
+            notes: ''
+        });
 
         const getDefaultGlobalRequirements = () => ({
             enabled: false,
@@ -80,17 +99,46 @@
             };
         };
 
+        const normalizeDistances = (distances = {}) => {
+            const normalized = {};
+            DISTANCE_AXES.forEach(axis => {
+                if (distances[axis] || distances[axis] === 0) {
+                    normalized[axis] = distances[axis];
+                    return;
+                }
+                const plusKey = axis + '+';
+                const minusKey = axis + '-';
+                if (distances[plusKey] || distances[plusKey] === 0) {
+                    normalized[axis] = distances[plusKey];
+                    return;
+                }
+                if (distances[minusKey] || distances[minusKey] === 0) {
+                    normalized[axis] = distances[minusKey];
+                }
+            });
+            return normalized;
+        };
+
+        const normalizeHardwareList = (hardware = []) => {
+            return hardware.map(item => ({
+                ...createHardwareItem(),
+                ...item,
+                id: item.id || (Date.now().toString() + Math.random())
+            }));
+        };
+
         const LatencyTester = () => {
             // State management
             const [testCases, setTestCases] = useState([]);
             const [activeTestCase, setActiveTestCase] = useState(null);
             const [activeExecution, setActiveExecution] = useState(null);
             const [comparisonExecutions, setComparisonExecutions] = useState([]);
-            const [view, setView] = useState('execution'); // execution, comparison, report
+            const [view, setView] = useState('execution'); // execution, comparison, report, traceability
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
-            const [axisGroupingEnabled, setAxisGroupingEnabled] = useState(true);
             const [selectedForReport, setSelectedForReport] = useState([]);
             const [globalRequirements, setGlobalRequirements] = useState(() => getDefaultGlobalRequirements());
+            const [traceabilityFilter, setTraceabilityFilter] = useState('');
+            const [importDialog, setImportDialog] = useState(null);
 
             const importRef = useRef(null);
 
@@ -100,7 +148,8 @@
                     'plus': '➕', 'trash-2': '🗑️', 'download': '⬇️', 'upload': '⬆️',
                     'edit': '✏️', 'save': '💾', 'x': '❌', 'check': '✅',
                     'bar-chart': '📊', 'settings': '⚙️', 'file-text': '📄',
-                    'eye': '👁️', 'eye-off': '👁️‍🗨️', 'git-compare': '🔄'
+                    'eye': '👁️', 'eye-off': '👁️‍🗨️', 'git-compare': '🔄',
+                    'hard-drive': '💽'
                 };
                 return <span>{icons[name] || '•'}</span>;
             };
@@ -429,11 +478,14 @@
             const hydrateTestCases = (cases = []) => {
                 return cases.map(tc => ({
                     ...tc,
+                    environment: { ...getDefaultEnvironment(), ...(tc.environment || {}) },
+                    distances: normalizeDistances(tc.distances || {}),
                     executions: (tc.executions || []).map(execution => ({
                         ...execution,
                         timestamps: execution.timestamps || [],
-                        distances: execution.distances || {},
-                        requirements: mergeExecutionRequirements(execution.requirements)
+                        requirements: mergeExecutionRequirements(execution.requirements),
+                        hardware: normalizeHardwareList(execution.hardware || []),
+                        notes: execution.notes || ''
                     }))
                 }));
             };
@@ -557,9 +609,9 @@
                 id: Date.now().toString() + '_exec',
                 name: 'Execution ' + ((testCase?.executions?.length || 0) + 1),
                 timestamps: [],
-                distances: {},
                 requirements: getDefaultExecutionRequirements(),
-                notes: ''
+                notes: '',
+                hardware: []
             });
 
             // Create new test case
@@ -569,11 +621,61 @@
                     name: 'Test Case ' + (testCases.length + 1),
                     metadata: {},
                     distances: {}, // Manual distance input per axis
+                    environment: getDefaultEnvironment(),
                     executions: []
                 };
                 const initialExecution = createNewExecution(testCase);
                 testCase.executions.push(initialExecution);
                 return testCase;
+            };
+
+            const openImportWizardForCsv = (fileName, parsedResult) => {
+                if (!parsedResult || parsedResult.timestamps.length === 0) return;
+
+                const baseName = fileName.replace(/\.csv$/i, '');
+                const defaultTarget = testCases.length === 0
+                    ? 'new'
+                    : (activeTestCase || (testCases[0]?.id ?? 'new'));
+                const selectedTc = testCases.find(tc => tc.id === defaultTarget);
+
+                const newCaseEnvironment = {
+                    ...getDefaultEnvironment(),
+                    name: parsedResult.metadata?.descriptor || '',
+                    dut: parsedResult.metadata?.abNumber || '',
+                    notes: parsedResult.metadata?.tagVersion
+                        ? `Tag version ${parsedResult.metadata.tagVersion}`
+                        : ''
+                };
+
+                const suggestedEnvironment = selectedTc
+                    ? { ...getDefaultEnvironment(), ...(selectedTc.environment || {}) }
+                    : newCaseEnvironment;
+
+                const defaultHardware = {
+                    ...createHardwareItem(),
+                    type: 'DUT',
+                    name: parsedResult.metadata?.descriptor || '',
+                    serialNumber: parsedResult.metadata?.abNumber || '',
+                    version: parsedResult.metadata?.tagVersion || ''
+                };
+
+                setImportDialog({
+                    fileName,
+                    parsed: parsedResult,
+                    targetTestCaseId: defaultTarget,
+                    newCaseDefaults: {
+                        testCaseName: baseName,
+                        environment: newCaseEnvironment,
+                        hardware: [defaultHardware]
+                    },
+                    form: {
+                        testCaseName: selectedTc ? selectedTc.name : baseName,
+                        environment: suggestedEnvironment,
+                        executionName: baseName,
+                        executionNotes: '',
+                        hardware: [defaultHardware]
+                    }
+                });
             };
 
             // Import file
@@ -589,42 +691,9 @@
                         try {
                             const result = parseDavinciCSV(content, file.name);
                             if (result && result.timestamps.length > 0) {
-                                let tc = currentTestCase;
-
-                                if (!tc) {
-                                    tc = createNewTestCase();
-                                    tc.name = file.name.replace('.csv', '');
-                                    tc.metadata = result.metadata || {};
-                                    setTestCases([...testCases, tc]);
-                                }
-
-                                const newExecution = createNewExecution(tc);
-                                newExecution.name = file.name;
-                                newExecution.timestamps = result.timestamps;
-                                newExecution.fps = result.fps;
-
-                                // Auto-populate distances from CSV
-                                Object.entries(result.rangesDetected).forEach(([axisKey, distance]) => {
-                                    if (distance !== null) {
-                                        newExecution.distances[axisKey] = distance;
-                                    }
-                                });
-
-                                tc.executions.push(newExecution);
-
-                                const updated = testCases.map(t => t.id === tc.id ? tc : t);
-                                if (!testCases.find(t => t.id === tc.id)) {
-                                    updated.push(tc);
-                                }
-
-                                setTestCases(updated);
-                                setActiveTestCase(tc.id);
-                                setActiveExecution(newExecution.id);
-
-                                alert('CSV imported successfully!\n' +
-                                    'FPS: ' + result.fps + '\n' +
-                                    'Timestamps: ' + result.timestamps.length + '\n' +
-                                    'Axes: ' + result.axesFound.join(', '));
+                                openImportWizardForCsv(file.name, result);
+                            } else {
+                                alert('No timestamps were detected in this CSV.');
                             }
                         } catch (err) {
                             alert('Error importing CSV: ' + err.message);
@@ -665,6 +734,295 @@
                 a.download = 'latency-test-data-' + new Date().toISOString().split('T')[0] + '.json';
                 a.click();
                 URL.revokeObjectURL(url);
+            };
+
+            const updateImportTarget = (value) => {
+                setImportDialog(prev => {
+                    if (!prev) return prev;
+                    let nextForm = { ...prev.form };
+                    if (value === 'new') {
+                        nextForm.testCaseName = prev.newCaseDefaults?.testCaseName || nextForm.testCaseName;
+                        nextForm.environment = {
+                            ...getDefaultEnvironment(),
+                            ...(prev.newCaseDefaults?.environment || {})
+                        };
+                    } else {
+                        const tc = testCases.find(item => item.id === value);
+                        if (tc) {
+                            nextForm.testCaseName = tc.name;
+                            nextForm.environment = {
+                                ...getDefaultEnvironment(),
+                                ...(tc.environment || {})
+                            };
+                        }
+                    }
+
+                    return { ...prev, targetTestCaseId: value, form: nextForm };
+                });
+            };
+
+            const updateImportFormField = (field, value) => {
+                setImportDialog(prev => prev ? ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        [field]: value
+                    }
+                }) : prev);
+            };
+
+            const updateImportEnvironmentField = (field, value) => {
+                setImportDialog(prev => prev ? ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        environment: {
+                            ...prev.form.environment,
+                            [field]: value
+                        }
+                    }
+                }) : prev);
+            };
+
+            const updateImportHardwareField = (hardwareId, field, value) => {
+                setImportDialog(prev => prev ? ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        hardware: prev.form.hardware.map(hw =>
+                            hw.id === hardwareId ? { ...hw, [field]: value } : hw
+                        )
+                    }
+                }) : prev);
+            };
+
+            const addHardwareToImport = () => {
+                setImportDialog(prev => prev ? ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        hardware: [...prev.form.hardware, createHardwareItem()]
+                    }
+                }) : prev);
+            };
+
+            const removeHardwareFromImport = (hardwareId) => {
+                setImportDialog(prev => prev ? ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        hardware: prev.form.hardware.filter(hw => hw.id !== hardwareId)
+                    }
+                }) : prev);
+            };
+
+            const closeImportDialog = () => setImportDialog(null);
+
+            const applyRangesToDistances = (baseDistances = {}, rangesDetected = {}) => {
+                const updated = { ...baseDistances };
+                Object.entries(rangesDetected).forEach(([axisKey, distance]) => {
+                    if (distance === null || distance === undefined) return;
+                    const axis = axisKey?.[0];
+                    if (!axis) return;
+                    if (!updated[axis] || distance > updated[axis]) {
+                        updated[axis] = distance;
+                    }
+                });
+                return updated;
+            };
+
+            const finalizeImportDialog = () => {
+                if (!importDialog) return;
+
+                const { parsed, form, targetTestCaseId } = importDialog;
+                let updatedTestCases = [...testCases];
+                let targetTestCase = null;
+
+                if (targetTestCaseId === 'new') {
+                    targetTestCase = createNewTestCase();
+                    targetTestCase.executions = [];
+                    targetTestCase.name = form.testCaseName || targetTestCase.name;
+                    targetTestCase.environment = { ...getDefaultEnvironment(), ...(form.environment || {}) };
+                    targetTestCase.metadata = parsed.metadata || {};
+                    updatedTestCases.push(targetTestCase);
+                } else {
+                    updatedTestCases = testCases.map(tc => {
+                        if (tc.id === targetTestCaseId) {
+                            const next = {
+                                ...tc,
+                                name: form.testCaseName || tc.name,
+                                environment: { ...getDefaultEnvironment(), ...(form.environment || {}) },
+                                metadata: { ...tc.metadata, ...(parsed.metadata || {}) }
+                            };
+                            targetTestCase = next;
+                            return next;
+                        }
+                        return tc;
+                    });
+                }
+
+                if (!targetTestCase) {
+                    alert('Unable to locate target test case for import.');
+                    return;
+                }
+
+                const execution = createNewExecution(targetTestCase);
+                execution.name = form.executionName || importDialog.fileName;
+                execution.timestamps = parsed.timestamps;
+                execution.fps = parsed.fps;
+                execution.notes = form.executionNotes;
+                const sanitizedHardware = (form.hardware || [])
+                    .map(hw => ({ ...hw, id: hw.id || (Date.now().toString() + Math.random()) }))
+                    .filter(hw => (hw.type || hw.name || hw.serialNumber || hw.version || hw.revision || hw.notes));
+                execution.hardware = sanitizedHardware;
+
+                targetTestCase.executions = [...(targetTestCase.executions || []), execution];
+                targetTestCase.distances = applyRangesToDistances(targetTestCase.distances || {}, parsed.rangesDetected || {});
+                targetTestCase.metadata = { ...targetTestCase.metadata, ...(parsed.metadata || {}) };
+
+                setTestCases(updatedTestCases);
+                setActiveTestCase(targetTestCase.id);
+                setActiveExecution(execution.id);
+
+                alert('CSV imported successfully!\n' +
+                    'FPS: ' + parsed.fps + '\n' +
+                    'Timestamps: ' + parsed.timestamps.length + '\n' +
+                    'Axes: ' + parsed.axesFound.join(', '));
+
+                setImportDialog(null);
+            };
+
+            const updateTestCaseDistance = (axis, value) => {
+                setTestCases(testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        const nextDistances = { ...tc.distances };
+                        if (value === '' || value === null) {
+                            delete nextDistances[axis];
+                        } else {
+                            nextDistances[axis] = Number(value);
+                        }
+                        return {
+                            ...tc,
+                            distances: nextDistances
+                        };
+                    }
+                    return tc;
+                }));
+            };
+
+            const getDistanceForAxisKey = (testCase, axisKey) => {
+                if (!testCase?.distances) return null;
+                if (testCase.distances[axisKey] || testCase.distances[axisKey] === 0) {
+                    return testCase.distances[axisKey];
+                }
+                const axis = axisKey?.[0];
+                if (!axis) return null;
+                if (testCase.distances[axis] || testCase.distances[axis] === 0) {
+                    return testCase.distances[axis];
+                }
+                return null;
+            };
+
+            const updateTestCaseEnvironmentField = (field, value) => {
+                setTestCases(testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            environment: {
+                                ...getDefaultEnvironment(),
+                                ...(tc.environment || {}),
+                                [field]: value
+                            }
+                        };
+                    }
+                    return tc;
+                }));
+            };
+
+            const updateExecutionField = (executionId, field, value) => {
+                setTestCases(testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex =>
+                                ex.id === executionId ? { ...ex, [field]: value } : ex
+                            )
+                        };
+                    }
+                    return tc;
+                }));
+            };
+
+            const addHardwareToExecution = () => {
+                setTestCases(testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex =>
+                                ex.id === activeExecution
+                                    ? { ...ex, hardware: [...(ex.hardware || []), createHardwareItem()] }
+                                    : ex
+                            )
+                        };
+                    }
+                    return tc;
+                }));
+            };
+
+            const updateExecutionHardwareField = (hardwareId, field, value) => {
+                setTestCases(testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex => {
+                                if (ex.id === activeExecution) {
+                                    return {
+                                        ...ex,
+                                        hardware: (ex.hardware || []).map(hw =>
+                                            hw.id === hardwareId ? { ...hw, [field]: value } : hw
+                                        )
+                                    };
+                                }
+                                return ex;
+                            })
+                        };
+                    }
+                    return tc;
+                }));
+            };
+
+            const removeExecutionHardware = (hardwareId) => {
+                setTestCases(testCases.map(tc => {
+                    if (tc.id === activeTestCase) {
+                        return {
+                            ...tc,
+                            executions: tc.executions.map(ex =>
+                                ex.id === activeExecution
+                                    ? { ...ex, hardware: (ex.hardware || []).filter(hw => hw.id !== hardwareId) }
+                                    : ex
+                            )
+                        };
+                    }
+                    return tc;
+                }));
+            };
+
+            const deleteExecution = (executionId) => {
+                const tc = testCases.find(item => item.id === activeTestCase);
+                if (!tc) return;
+                if (tc.executions.length === 1) {
+                    alert('A test case must have at least one execution. Add another before deleting this one.');
+                    return;
+                }
+                if (!confirm('Delete this execution? This cannot be undone.')) return;
+
+                const updatedExecutions = tc.executions.filter(ex => ex.id !== executionId);
+                const nextActive = updatedExecutions[0]?.id;
+                const updatedTestCases = testCases.map(item =>
+                    item.id === tc.id ? { ...item, executions: updatedExecutions } : item
+                );
+                setTestCases(updatedTestCases);
+                setActiveExecution(nextActive || updatedExecutions[0]?.id || null);
             };
 
             // Toggle marker inclusion
@@ -983,6 +1341,18 @@
                                                     <div>
                                                         <span className="font-medium">Total Measurements:</span> {allTimestamps.filter(ts => !ts.isError).length}
                                                     </div>
+                                                    <div>
+                                                        <span className="font-medium">Environment:</span> {tc.environment?.name || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Location:</span> {tc.environment?.location || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Owner:</span> {tc.environment?.owner || 'N/A'}
+                                                    </div>
+                                                    <div>
+                                                        <span className="font-medium">Primary DUT:</span> {tc.environment?.dut || 'N/A'}
+                                                    </div>
                                                 </div>
                                             </div>
 
@@ -991,11 +1361,13 @@
                                                 <div className="mb-6">
                                                     <h3 className="text-lg font-semibold mb-2">Tested Distances</h3>
                                                     <div className="flex flex-wrap gap-2">
-                                                        {Object.entries(tc.distances).map(([axis, distance]) => (
-                                                            <span key={axis} className="px-3 py-1 bg-blue-100 rounded">
-                                                                {axis}: {distance}mm
-                                                            </span>
-                                                        ))}
+                                                        {Object.entries(tc.distances)
+                                                            .filter(([, distance]) => distance || distance === 0)
+                                                            .map(([axis, distance]) => (
+                                                                <span key={axis} className="px-3 py-1 bg-blue-100 rounded">
+                                                                    {axis}: {distance}mm
+                                                                </span>
+                                                            ))}
                                                     </div>
                                                 </div>
                                             )}
@@ -1090,7 +1462,7 @@
                                                             const axisStats = !isUngrouped
                                                                 ? getAxisStatistics(allTimestamps, axis, direction, globalRequirements)
                                                                 : getStatistics(axisTimestamps, globalRequirements);
-                                                            const axisDistance = !isUngrouped ? (tc.distances?.[axisKey] ?? null) : null;
+                                                            const axisDistance = !isUngrouped ? getDistanceForAxisKey(tc, axisKey) : null;
                                                             const requirementRange = !isUngrouped ? globalRequirements?.ranges?.[axisKey] : null;
                                                             const axisErrorCount = allTimestamps.filter(ts => {
                                                                 if (isUngrouped) {
@@ -1205,10 +1577,265 @@
                                                     </div>
                                                 </div>
                                             )}
+
+                                            {tc.executions.some(ex => (ex.hardware || []).length > 0) && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-2">Hardware Coverage</h3>
+                                                    <div className="space-y-3">
+                                                        {tc.executions.map(ex => (
+                                                            <div key={ex.id} className="border rounded-lg p-3">
+                                                                <div className="font-medium text-sm">{ex.name}</div>
+                                                                {(ex.hardware || []).length > 0 ? (
+                                                                    <div className="flex flex-wrap gap-2 mt-2">
+                                                                        {ex.hardware.map(hw => (
+                                                                            <span key={hw.id} className="px-2 py-0.5 bg-gray-100 rounded-full text-xs text-gray-700">
+                                                                                {[hw.type, hw.name].filter(Boolean).join(' • ') || 'Device'}
+                                                                                {hw.serialNumber ? ` (${hw.serialNumber})` : ''}
+                                                                            </span>
+                                                                        ))}
+                                                                    </div>
+                                                                ) : (
+                                                                    <p className="text-xs text-gray-500 mt-2">No hardware documented.</p>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
                                         </div>
                                     );
                                 })
                             )}
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderImportModal = () => {
+                if (!importDialog) return null;
+                const { parsed, form, targetTestCaseId } = importDialog;
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                        <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] overflow-y-auto">
+                            <div className="px-6 py-4 border-b flex items-center justify-between">
+                                <div>
+                                    <h2 className="text-xl font-semibold">CSV Import Wizard</h2>
+                                    <p className="text-sm text-gray-500">Provide test case context before creating the execution.</p>
+                                </div>
+                                <button onClick={closeImportDialog} className="text-gray-500 hover:text-gray-700">
+                                    <Icon name="x" />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-6">
+                                <div className="grid md:grid-cols-2 gap-4">
+                                    <div className="bg-gray-50 rounded-lg p-4">
+                                        <h3 className="font-semibold mb-2">File Insights</h3>
+                                        <p className="text-sm"><span className="font-medium">File:</span> {importDialog.fileName}</p>
+                                        <p className="text-sm"><span className="font-medium">Detected FPS:</span> {parsed.fps}</p>
+                                        <p className="text-sm"><span className="font-medium">Timestamps:</span> {parsed.timestamps.length}</p>
+                                        <p className="text-sm"><span className="font-medium">Axes:</span> {parsed.axesFound.length > 0 ? parsed.axesFound.join(', ') : 'N/A'}</p>
+                                        {parsed.metadata?.abNumber && (
+                                            <p className="text-sm text-gray-600 mt-2">Suggested DUT: {parsed.metadata.abNumber}</p>
+                                        )}
+                                    </div>
+                                    <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                                        <div>
+                                            <label className="text-sm font-medium">Attach to Test Case</label>
+                                            <select
+                                                className="w-full border rounded px-3 py-2"
+                                                value={targetTestCaseId}
+                                                onChange={(e) => updateImportTarget(e.target.value)}
+                                            >
+                                                <option value="new">➕ Create new test case</option>
+                                                {testCases.map(tc => (
+                                                    <option key={tc.id} value={tc.id}>{tc.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-medium">Test Case Name</label>
+                                            <input
+                                                type="text"
+                                                className="w-full border rounded px-3 py-2"
+                                                value={form.testCaseName}
+                                                onChange={(e) => updateImportFormField('testCaseName', e.target.value)}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-medium">Execution Name</label>
+                                            <input
+                                                type="text"
+                                                className="w-full border rounded px-3 py-2"
+                                                value={form.executionName}
+                                                onChange={(e) => updateImportFormField('executionName', e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid md:grid-cols-2 gap-4">
+                                    <div className="space-y-3">
+                                        <h3 className="font-semibold">Test Environment</h3>
+                                        <div>
+                                            <label className="text-sm font-medium">Environment Name</label>
+                                            <input
+                                                type="text"
+                                                className="w-full border rounded px-3 py-2"
+                                                value={form.environment.name}
+                                                onChange={(e) => updateImportEnvironmentField('name', e.target.value)}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-medium">Location</label>
+                                            <input
+                                                type="text"
+                                                className="w-full border rounded px-3 py-2"
+                                                value={form.environment.location}
+                                                onChange={(e) => updateImportEnvironmentField('location', e.target.value)}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-medium">Owner / Operator</label>
+                                            <input
+                                                type="text"
+                                                className="w-full border rounded px-3 py-2"
+                                                value={form.environment.owner}
+                                                onChange={(e) => updateImportEnvironmentField('owner', e.target.value)}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-medium">Primary DUT / Build</label>
+                                            <input
+                                                type="text"
+                                                className="w-full border rounded px-3 py-2"
+                                                value={form.environment.dut}
+                                                onChange={(e) => updateImportEnvironmentField('dut', e.target.value)}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-sm font-medium">Notes</label>
+                                            <textarea
+                                                className="w-full border rounded px-3 py-2"
+                                                rows="3"
+                                                value={form.environment.notes}
+                                                onChange={(e) => updateImportEnvironmentField('notes', e.target.value)}
+                                            ></textarea>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                        <h3 className="font-semibold">Execution Notes</h3>
+                                        <textarea
+                                            className="w-full border rounded px-3 py-2"
+                                            rows="6"
+                                            value={form.executionNotes}
+                                            onChange={(e) => updateImportFormField('executionNotes', e.target.value)}
+                                            placeholder="Describe the scenario, stimulus, or anything unique about this run."
+                                        ></textarea>
+                                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                                            Suggestions are generated from the CSV metadata and filename. Adjust anything that
+                                            differs for this import.
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h3 className="font-semibold">Test Hardware</h3>
+                                        <button
+                                            onClick={addHardwareToImport}
+                                            className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                                        >
+                                            <Icon name="plus" /> Add Hardware
+                                        </button>
+                                    </div>
+                                    {form.hardware.length === 0 ? (
+                                        <p className="text-sm text-gray-500">No hardware linked yet.</p>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {form.hardware.map(hw => (
+                                                <div key={hw.id} className="border rounded-lg p-3 space-y-3">
+                                                    <div className="grid md:grid-cols-3 gap-3">
+                                                        <div>
+                                                            <label className="text-sm font-medium">Hardware Type</label>
+                                                            <input
+                                                                type="text"
+                                                                className="w-full border rounded px-2 py-1"
+                                                                value={hw.type}
+                                                                onChange={(e) => updateImportHardwareField(hw.id, 'type', e.target.value)}
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-sm font-medium">Name</label>
+                                                            <input
+                                                                type="text"
+                                                                className="w-full border rounded px-2 py-1"
+                                                                value={hw.name}
+                                                                onChange={(e) => updateImportHardwareField(hw.id, 'name', e.target.value)}
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-sm font-medium">Serial Number</label>
+                                                            <input
+                                                                type="text"
+                                                                className="w-full border rounded px-2 py-1"
+                                                                value={hw.serialNumber}
+                                                                onChange={(e) => updateImportHardwareField(hw.id, 'serialNumber', e.target.value)}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="grid md:grid-cols-3 gap-3">
+                                                        <div>
+                                                            <label className="text-sm font-medium">Version</label>
+                                                            <input
+                                                                type="text"
+                                                                className="w-full border rounded px-2 py-1"
+                                                                value={hw.version}
+                                                                onChange={(e) => updateImportHardwareField(hw.id, 'version', e.target.value)}
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-sm font-medium">Revision</label>
+                                                            <input
+                                                                type="text"
+                                                                className="w-full border rounded px-2 py-1"
+                                                                value={hw.revision}
+                                                                onChange={(e) => updateImportHardwareField(hw.id, 'revision', e.target.value)}
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="text-sm font-medium">Notes</label>
+                                                            <input
+                                                                type="text"
+                                                                className="w-full border rounded px-2 py-1"
+                                                                value={hw.notes}
+                                                                onChange={(e) => updateImportHardwareField(hw.id, 'notes', e.target.value)}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <button
+                                                            onClick={() => removeHardwareFromImport(hw.id)}
+                                                            className="text-sm text-red-600 hover:text-red-800"
+                                                        >
+                                                            <Icon name="trash-2" /> Remove
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="px-6 py-4 border-t flex justify-end gap-3 bg-gray-50">
+                                <button onClick={closeImportDialog} className="px-4 py-2 border rounded">Cancel</button>
+                                <button
+                                    onClick={finalizeImportDialog}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                >
+                                    Create Execution
+                                </button>
+                            </div>
                         </div>
                     </div>
                 );
@@ -1307,23 +1934,209 @@
                             </div>
                         )}
 
+                        {/* Test Environment */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <h3 className="font-semibold mb-3">Test Environment</h3>
+                            <div className="grid md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Environment Name</label>
+                                    <input
+                                        type="text"
+                                        value={currentTestCase.environment?.name || ''}
+                                        onChange={(e) => updateTestCaseEnvironmentField('name', e.target.value)}
+                                        className="w-full border rounded px-3 py-2"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Location</label>
+                                    <input
+                                        type="text"
+                                        value={currentTestCase.environment?.location || ''}
+                                        onChange={(e) => updateTestCaseEnvironmentField('location', e.target.value)}
+                                        className="w-full border rounded px-3 py-2"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Owner / Operator</label>
+                                    <input
+                                        type="text"
+                                        value={currentTestCase.environment?.owner || ''}
+                                        onChange={(e) => updateTestCaseEnvironmentField('owner', e.target.value)}
+                                        className="w-full border rounded px-3 py-2"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Primary DUT / Build</label>
+                                    <input
+                                        type="text"
+                                        value={currentTestCase.environment?.dut || ''}
+                                        onChange={(e) => updateTestCaseEnvironmentField('dut', e.target.value)}
+                                        className="w-full border rounded px-3 py-2"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-3">
+                                <label className="block text-sm font-medium mb-1">Notes</label>
+                                <textarea
+                                    value={currentTestCase.environment?.notes || ''}
+                                    onChange={(e) => updateTestCaseEnvironmentField('notes', e.target.value)}
+                                    className="w-full border rounded px-3 py-2"
+                                    rows="3"
+                                ></textarea>
+                            </div>
+                        </div>
+
                         {/* Manual Distance Input */}
                         <div className="bg-white rounded-lg shadow p-4 mb-4">
                             <h3 className="font-semibold mb-2">Set Test Distances (mm)</h3>
-                            <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-                                {AXIS_KEYS.map(axisKey => (
+                            <p className="text-xs text-gray-500 mb-3">Each value applies to the positive and negative sweep of that axis.</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                {DISTANCE_AXES.map(axisKey => (
                                     <div key={axisKey}>
-                                        <label className="block text-sm mb-1">{axisKey}</label>
+                                        <label className="block text-sm mb-1">{axisKey} Axis</label>
                                         <input
                                             type="number"
-                                            value={currentTestCase.distances?.[axisKey] || ''}
-                                            onChange={(e) => updateAxisDistance(axisKey[0], axisKey[1], e.target.value)}
+                                            value={currentTestCase.distances?.[axisKey] ?? ''}
+                                            onChange={(e) => updateTestCaseDistance(axisKey, e.target.value)}
                                             placeholder="mm"
                                             className="w-full px-2 py-1 border rounded text-sm"
                                         />
                                     </div>
                                 ))}
                             </div>
+                        </div>
+
+                        {/* Execution Details */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                                <h3 className="font-semibold">Execution Details</h3>
+                                <button
+                                    onClick={() => deleteExecution(currentExecution.id)}
+                                    className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded hover:bg-red-50"
+                                >
+                                    <Icon name="trash-2" /> Delete Execution
+                                </button>
+                            </div>
+                            <div className="grid md:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">Execution Name</label>
+                                    <input
+                                        type="text"
+                                        value={currentExecution.name}
+                                        onChange={(e) => updateExecutionField(currentExecution.id, 'name', e.target.value)}
+                                        className="w-full border rounded px-3 py-2"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">FPS (from import)</label>
+                                    <input
+                                        type="text"
+                                        value={currentExecution.fps || ''}
+                                        onChange={(e) => updateExecutionField(currentExecution.id, 'fps', e.target.value)}
+                                        className="w-full border rounded px-3 py-2"
+                                        placeholder="e.g., 240"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-3">
+                                <label className="block text-sm font-medium mb-1">Notes</label>
+                                <textarea
+                                    value={currentExecution.notes || ''}
+                                    onChange={(e) => updateExecutionField(currentExecution.id, 'notes', e.target.value)}
+                                    className="w-full border rounded px-3 py-2"
+                                    rows="3"
+                                    placeholder="Add any observations for this execution."
+                                ></textarea>
+                            </div>
+                        </div>
+
+                        {/* Execution Hardware */}
+                        <div className="bg-white rounded-lg shadow p-4 mb-4">
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="font-semibold">Execution Hardware</h3>
+                                <button
+                                    onClick={addHardwareToExecution}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                                >
+                                    <Icon name="plus" /> Add Hardware
+                                </button>
+                            </div>
+                            {(!currentExecution.hardware || currentExecution.hardware.length === 0) ? (
+                                <p className="text-sm text-gray-500">No hardware linked. Use the button above to add devices.</p>
+                            ) : (
+                                <div className="space-y-3">
+                                    {currentExecution.hardware.map(hw => (
+                                        <div key={hw.id} className="border rounded-lg p-3 space-y-3">
+                                            <div className="grid md:grid-cols-3 gap-3">
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Type</label>
+                                                    <input
+                                                        type="text"
+                                                        value={hw.type}
+                                                        onChange={(e) => updateExecutionHardwareField(hw.id, 'type', e.target.value)}
+                                                        className="w-full border rounded px-2 py-1"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Name</label>
+                                                    <input
+                                                        type="text"
+                                                        value={hw.name}
+                                                        onChange={(e) => updateExecutionHardwareField(hw.id, 'name', e.target.value)}
+                                                        className="w-full border rounded px-2 py-1"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Serial</label>
+                                                    <input
+                                                        type="text"
+                                                        value={hw.serialNumber}
+                                                        onChange={(e) => updateExecutionHardwareField(hw.id, 'serialNumber', e.target.value)}
+                                                        className="w-full border rounded px-2 py-1"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="grid md:grid-cols-3 gap-3">
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Version</label>
+                                                    <input
+                                                        type="text"
+                                                        value={hw.version}
+                                                        onChange={(e) => updateExecutionHardwareField(hw.id, 'version', e.target.value)}
+                                                        className="w-full border rounded px-2 py-1"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Revision</label>
+                                                    <input
+                                                        type="text"
+                                                        value={hw.revision}
+                                                        onChange={(e) => updateExecutionHardwareField(hw.id, 'revision', e.target.value)}
+                                                        className="w-full border rounded px-2 py-1"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-medium mb-1">Notes</label>
+                                                    <input
+                                                        type="text"
+                                                        value={hw.notes}
+                                                        onChange={(e) => updateExecutionHardwareField(hw.id, 'notes', e.target.value)}
+                                                        className="w-full border rounded px-2 py-1"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <button
+                                                    onClick={() => removeExecutionHardware(hw.id)}
+                                                    className="text-sm text-red-600 hover:text-red-800"
+                                                >
+                                                    <Icon name="trash-2" /> Remove
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {/* Requirements Settings */}
@@ -1439,10 +2252,8 @@
                             </div>
                         )}
 
-                        {/* Per-Axis Tables or Combined */}
-                        {axisGroupingEnabled ? (
-                            // Separate tables per axis
-                            <div className="space-y-4">
+                        {/* Per-Axis Tables */}
+                        <div className="space-y-4">
                                 {Object.entries(axisGroups).map(([axisKey, axisTimestamps]) => {
                                     const isUngrouped = axisKey === UNGROUPED_BUCKET;
                                     const axis = isUngrouped ? null : axisKey[0];
@@ -1450,7 +2261,7 @@
                                     const axisStats = isUngrouped
                                         ? getStatistics(axisTimestamps, requirements)
                                         : getAxisStatistics(axisTimestamps, axis, direction, requirements);
-                                    const distance = !isUngrouped ? currentExecution.distances?.[axisKey] : null;
+                                    const distance = !isUngrouped ? getDistanceForAxisKey(currentTestCase, axisKey) : null;
 
                                     return (
                                         <div key={axisKey} className="bg-white rounded-lg shadow overflow-hidden">
@@ -1577,75 +2388,124 @@
                                     );
                                 })}
                             </div>
-                        ) : (
-                            // Combined table
-                            <div className="bg-white rounded-lg shadow overflow-hidden">
-                                <div className="p-4 border-b">
-                                    <h3 className="font-semibold">All Timestamps</h3>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-gray-50">
-                                            <tr>
-                                                <th className="px-4 py-2 text-left">Include</th>
-                                                <th className="px-4 py-2 text-left">Time (s)</th>
-                                                <th className="px-4 py-2 text-left">Timecode</th>
-                                                <th className="px-4 py-2 text-left">Label</th>
-                                                <th className="px-4 py-2 text-left">Axis</th>
-                                                <th className="px-4 py-2 text-left">Note</th>
-                                                <th className="px-4 py-2 text-right">Latency</th>
-                                                <th className="px-4 py-2 text-center">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {timestamps.map(ts => {
-                                                const rowClass = ts.isError ? 'row-error' :
-                                                    ts.excludeFromStats ? 'row-excluded' :
-                                                    showPassFailHighlight && requirements.enabled && ts.latencyMs ?
-                                                        (ts.latencyMs <= requirements.maxLatency ? 'row-pass' : 'row-fail') : '';
+                        </div>
+                    </div>
+                );
+            };
 
-                                                return (
-                                                    <tr key={ts.id} className={rowClass + ' border-t hover:bg-gray-50'}>
-                                                        <td className="px-4 py-2">
-                                                            {!ts.isError && (
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={!ts.excludeFromStats}
-                                                                    onChange={() => toggleMarkerInclusion(ts.id)}
-                                                                    className="w-4 h-4"
-                                                                />
-                                                            )}
-                                                        </td>
-                                                        <td className="px-4 py-2 font-mono">{ts.time}</td>
-                                                        <td className="px-4 py-2 font-mono text-xs">{ts.recordIn}</td>
-                                                        <td className="px-4 py-2">
-                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                                                ts.label === 'TagOn' ? 'bg-green-100 text-green-800' :
-                                                                ts.label === 'TagOff' ? 'bg-blue-100 text-blue-800' :
-                                                                'bg-red-100 text-red-800'
-                                                            }`}>
-                                                                {ts.label}
-                                                            </span>
-                                                        </td>
-                                                        <td className="px-4 py-2 font-medium">{ts.axis && ts.direction ? ts.axis + ts.direction : '-'}</td>
-                                                        <td className="px-4 py-2 text-xs max-w-xs truncate" title={ts.note}>{ts.note}</td>
-                                                        <td className="px-4 py-2 text-right font-mono font-bold">{ts.latency || '-'}</td>
-                                                        <td className="px-4 py-2 text-center">
-                                                            <button
-                                                                onClick={() => handleDeleteTimestamp(ts.id)}
-                                                                className="text-red-600 hover:text-red-800"
-                                                            >
-                                                                <Icon name="trash-2" />
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
+            const renderTraceabilityView = () => {
+                const usages = [];
+                testCases.forEach(tc => {
+                    tc.executions.forEach(ex => {
+                        (ex.hardware || []).forEach(hw => {
+                            if (!hw) return;
+                            const hasDetails = hw.type || hw.name || hw.serialNumber || hw.version || hw.revision;
+                            if (!hasDetails) return;
+                            usages.push({ hw, tc, ex });
+                        });
+                    });
+                });
+
+                if (usages.length === 0) {
+                    return (
+                        <div className="p-6">
+                            <div className="bg-white rounded-lg shadow p-6 text-center">
+                                <h3 className="text-lg font-semibold mb-2">No hardware tracked yet</h3>
+                                <p className="text-sm text-gray-500">Add hardware to an execution to build a coverage map.</p>
                             </div>
-                        )}
+                        </div>
+                    );
+                }
+
+                const grouped = usages.reduce((acc, entry) => {
+                    const serial = (entry.hw.serialNumber || '').trim().toLowerCase();
+                    const fallback = `${(entry.hw.name || entry.hw.type || 'device').toLowerCase()}-${entry.hw.id}`;
+                    const key = serial || fallback;
+                    if (!acc[key]) {
+                        acc[key] = {
+                            key,
+                            serial: entry.hw.serialNumber || '',
+                            type: entry.hw.type || '',
+                            name: entry.hw.name || '',
+                            version: entry.hw.version || '',
+                            revision: entry.hw.revision || '',
+                            notes: entry.hw.notes || '',
+                            usages: []
+                        };
+                    }
+                    acc[key].usages.push({
+                        testCaseId: entry.tc.id,
+                        testCaseName: entry.tc.name,
+                        executionId: entry.ex.id,
+                        executionName: entry.ex.name
+                    });
+                    return acc;
+                }, {});
+
+                const filterValue = traceabilityFilter.toLowerCase();
+                const devices = Object.values(grouped)
+                    .filter(device => {
+                        if (!filterValue) return true;
+                        return [device.serial, device.name, device.type]
+                            .some(val => (val || '').toLowerCase().includes(filterValue));
+                    })
+                    .sort((a, b) => b.usages.length - a.usages.length);
+
+                return (
+                    <div className="p-6 space-y-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h2 className="text-2xl font-bold">Device Traceability</h2>
+                                <p className="text-sm text-gray-500">See which executions each device participated in.</p>
+                            </div>
+                            <input
+                                type="text"
+                                value={traceabilityFilter}
+                                onChange={(e) => setTraceabilityFilter(e.target.value)}
+                                className="border rounded px-3 py-2 w-64"
+                                placeholder="Search by serial, name, type"
+                            />
+                        </div>
+                        <div className="bg-white rounded-lg shadow overflow-hidden">
+                            <table className="w-full text-sm">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-4 py-2 text-left">Type</th>
+                                        <th className="px-4 py-2 text-left">Name</th>
+                                        <th className="px-4 py-2 text-left">Serial</th>
+                                        <th className="px-4 py-2 text-left">Version</th>
+                                        <th className="px-4 py-2 text-left">Revision</th>
+                                        <th className="px-4 py-2 text-left">Usage</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {devices.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="6" className="px-4 py-4 text-center text-gray-500">No devices match your filter.</td>
+                                        </tr>
+                                    ) : (
+                                        devices.map(device => (
+                                            <tr key={device.key} className="border-t hover:bg-gray-50">
+                                                <td className="px-4 py-3 font-medium">{device.type || '—'}</td>
+                                                <td className="px-4 py-3">{device.name || '—'}</td>
+                                                <td className="px-4 py-3">{device.serial || '—'}</td>
+                                                <td className="px-4 py-3">{device.version || '—'}</td>
+                                                <td className="px-4 py-3">{device.revision || '—'}</td>
+                                                <td className="px-4 py-3">
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {device.usages.map((usage, index) => (
+                                                            <span key={usage.executionId + index} className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-xs">
+                                                                {usage.testCaseName} · {usage.executionName}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 );
             };
@@ -1772,22 +2632,17 @@
                                 <Icon name="git-compare" /> Comparison ({comparisonExecutions.length})
                             </button>
                             <button
+                                onClick={() => setView('traceability')}
+                                className={`px-4 py-2 ${view === 'traceability' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="hard-drive" /> Devices
+                            </button>
+                            <button
                                 onClick={() => setView('report')}
                                 className={`px-4 py-2 ${view === 'report' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
                             >
                                 <Icon name="file-text" /> Report
                             </button>
-                            <div className="ml-auto flex items-center space-x-2 px-4">
-                                <label className="text-sm flex items-center cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={axisGroupingEnabled}
-                                        onChange={(e) => setAxisGroupingEnabled(e.target.checked)}
-                                        className="mr-2"
-                                    />
-                                    Group by Axis
-                                </label>
-                            </div>
                         </div>
                     </div>
 
@@ -1868,9 +2723,12 @@
                         <div className="flex-1">
                             {view === 'execution' && renderExecutionView()}
                             {view === 'comparison' && renderComparisonView()}
+                            {view === 'traceability' && renderTraceabilityView()}
                             {view === 'report' && renderReportView()}
                         </div>
                     </div>
+
+                    {renderImportModal()}
 
                     <input
                         ref={importRef}
