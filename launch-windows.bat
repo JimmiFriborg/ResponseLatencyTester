@@ -12,7 +12,7 @@ set "SCRIPT_DIR=%~dp0"
 set "HTML_FILE="
 set "HTML_NAME="
 
-for %%F in (latency-tester-v3.8.html latency-tester-portable.html) do (
+for %%F in (latency-tester-v3.8.1.html latency-tester-v3.8.html latency-tester-portable.html) do (
     if exist "%SCRIPT_DIR%%%F" (
         set "HTML_FILE=%SCRIPT_DIR%%%F"
         set "HTML_NAME=%%F"
@@ -21,7 +21,7 @@ for %%F in (latency-tester-v3.8.html latency-tester-portable.html) do (
 )
 
 echo Error: Could not find a latency tester HTML file.
-echo Please ensure latency-tester-v3.8.html or latency-tester-portable.html is in this directory.
+echo Please ensure latency-tester-v3.8.1.html (or latency-tester-v3.8.html / latency-tester-portable.html) is in this directory.
 goto :end
 
 :launch

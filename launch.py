@@ -19,6 +19,7 @@ def main():
     script_dir = Path(__file__).parent.absolute()
 
     preferred_files = [
+        "latency-tester-v3.8.1.html",
         "latency-tester-v3.8.html",
         "latency-tester-portable.html"
     ]
