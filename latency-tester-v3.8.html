@@ -30,6 +30,56 @@
     <script type="text/babel" data-presets="env,react">
         const { useState, useEffect, useRef } = React;
 
+        const AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'];
+        const AXES = ['X', 'Y', 'Z'];
+
+        const getDefaultGlobalRequirements = () => ({
+            enabled: false,
+            maxLatency: 100,
+            ranges: AXIS_KEYS.reduce((acc, axisKey) => {
+                acc[axisKey] = { minRespond: 5, mustNotRespond: 25 };
+                return acc;
+            }, {})
+        });
+
+        const getDefaultExecutionRequirements = () => ({
+            enabled: false,
+            maxLatency: 100,
+            minRespondRanges: { X: 5, Y: 5, Z: 5 },
+            mustNotRespondRanges: { X: 25, Y: 25, Z: 25 }
+        });
+
+        const mergeExecutionRequirements = (requirements = {}) => {
+            const defaults = getDefaultExecutionRequirements();
+            return {
+                ...defaults,
+                ...requirements,
+                minRespondRanges: {
+                    ...defaults.minRespondRanges,
+                    ...(requirements?.minRespondRanges || {})
+                },
+                mustNotRespondRanges: {
+                    ...defaults.mustNotRespondRanges,
+                    ...(requirements?.mustNotRespondRanges || {})
+                }
+            };
+        };
+
+        const mergeGlobalRequirements = (requirements = {}) => {
+            const defaults = getDefaultGlobalRequirements();
+            return {
+                ...defaults,
+                ...requirements,
+                ranges: AXIS_KEYS.reduce((acc, axisKey) => {
+                    acc[axisKey] = {
+                        ...defaults.ranges[axisKey],
+                        ...(requirements?.ranges?.[axisKey] || {})
+                    };
+                    return acc;
+                }, {})
+            };
+        };
+
         const LatencyTester = () => {
             // State management
             const [testCases, setTestCases] = useState([]);
@@ -40,6 +90,7 @@
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
             const [axisGroupingEnabled, setAxisGroupingEnabled] = useState(true);
             const [selectedForReport, setSelectedForReport] = useState([]);
+            const [globalRequirements, setGlobalRequirements] = useState(() => getDefaultGlobalRequirements());
 
             const importRef = useRef(null);
 
@@ -375,6 +426,18 @@
                 };
             };
 
+            const hydrateTestCases = (cases = []) => {
+                return cases.map(tc => ({
+                    ...tc,
+                    executions: (tc.executions || []).map(execution => ({
+                        ...execution,
+                        timestamps: execution.timestamps || [],
+                        distances: execution.distances || {},
+                        requirements: mergeExecutionRequirements(execution.requirements)
+                    }))
+                }));
+            };
+
             // Statistics
             function getStatistics(timestamps, requirements = null) {
                 const validTimestamps = timestamps.filter(ts =>
@@ -489,34 +552,29 @@
                 return orderedGroups;
             };
 
-            // Create new test case
-            const createNewTestCase = () => ({
-                id: Date.now().toString(),
-                name: 'Test Case ' + (testCases.length + 1),
-                metadata: {},
-                distances: {}, // Manual distance input per axis
-                executions: [{
-                    id: Date.now().toString() + '_exec',
-                    name: 'Execution 1',
-                    timestamps: [],
-                    notes: ''
-                }]
-            });
-
             // Create new execution
-            const createNewExecution = (testCase) => ({
+            const createNewExecution = (testCase = { executions: [] }) => ({
                 id: Date.now().toString() + '_exec',
-                name: 'Execution ' + (testCase.executions.length + 1),
+                name: 'Execution ' + ((testCase?.executions?.length || 0) + 1),
                 timestamps: [],
                 distances: {},
-                requirements: {
-                    enabled: false,
-                    maxLatency: 100,
-                    minRespondRanges: { X: 5, Y: 5, Z: 5 },
-                    mustNotRespondRanges: { X: 25, Y: 25, Z: 25 }
-                },
+                requirements: getDefaultExecutionRequirements(),
                 notes: ''
             });
+
+            // Create new test case
+            const createNewTestCase = () => {
+                const testCase = {
+                    id: Date.now().toString(),
+                    name: 'Test Case ' + (testCases.length + 1),
+                    metadata: {},
+                    distances: {}, // Manual distance input per axis
+                    executions: []
+                };
+                const initialExecution = createNewExecution(testCase);
+                testCase.executions.push(initialExecution);
+                return testCase;
+            };
 
             // Import file
             const handleFileImport = (e) => {
@@ -576,9 +634,12 @@
                         try {
                             const data = JSON.parse(content);
                             if (data.testCases) {
-                                setTestCases(data.testCases);
-                                alert('Data imported successfully!');
+                                setTestCases(hydrateTestCases(data.testCases));
                             }
+                            if (data.globalRequirements) {
+                                setGlobalRequirements(mergeGlobalRequirements(data.globalRequirements));
+                            }
+                            alert('Data imported successfully!');
                         } catch (err) {
                             alert('Error importing JSON: ' + err.message);
                         }
@@ -720,6 +781,43 @@
                 setTestCases(updated);
             };
 
+            const updateExecutionRequirements = (field, value) => {
+                if (!activeTestCase || !activeExecution) return;
+
+                const updated = testCases.map(tc => {
+                    if (tc.id !== activeTestCase) return tc;
+
+                    return {
+                        ...tc,
+                        executions: tc.executions.map(ex => {
+                            if (ex.id !== activeExecution) return ex;
+
+                            const mergedRequirements = mergeExecutionRequirements(ex.requirements);
+                            let nextRequirements;
+
+                            if (field === 'minRespondRanges' || field === 'mustNotRespondRanges') {
+                                nextRequirements = {
+                                    ...mergedRequirements,
+                                    [field]: {
+                                        ...mergedRequirements[field],
+                                        ...value
+                                    }
+                                };
+                            } else {
+                                nextRequirements = {
+                                    ...mergedRequirements,
+                                    [field]: value
+                                };
+                            }
+
+                            return { ...ex, requirements: nextRequirements };
+                        })
+                    };
+                });
+
+                setTestCases(updated);
+            };
+
             // Get current test case and execution
             const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
             const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
@@ -761,7 +859,7 @@
 
                         <h3 className="text-lg font-semibold mb-4">Range Requirements (mm)</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'].map(axis => (
+                            {AXIS_KEYS.map(axis => (
                                 <div key={axis} className="border rounded p-4">
                                     <h4 className="font-semibold mb-2">{axis}</h4>
                                     <div className="space-y-2">
@@ -1140,7 +1238,8 @@
                 }
 
                 const timestamps = currentExecution.timestamps;
-                const overallStats = getStatistics(timestamps);
+                const requirements = mergeExecutionRequirements(currentExecution.requirements);
+                const overallStats = getStatistics(timestamps, requirements);
                 const axisGroups = groupByAxis(timestamps);
                 const ungroupedCount = timestamps.filter(ts => !ts.isError && (!ts.axis || !ts.direction)).length;
                 const errorEvents = timestamps.filter(ts => ts.isError);
@@ -1212,7 +1311,7 @@
                         <div className="bg-white rounded-lg shadow p-4 mb-4">
                             <h3 className="font-semibold mb-2">Set Test Distances (mm)</h3>
                             <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
-                                {['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'].map(axisKey => (
+                                {AXIS_KEYS.map(axisKey => (
                                     <div key={axisKey}>
                                         <label className="block text-sm mb-1">{axisKey}</label>
                                         <input
@@ -1253,7 +1352,7 @@
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        {['X', 'Y', 'Z'].map(axis => (
+                                        {AXES.map(axis => (
                                             <div key={axis} className="border rounded p-3">
                                                 <div className="font-medium mb-2">{axis} Axis</div>
                                                 <div className="space-y-2">
@@ -1440,7 +1539,7 @@
                                                                                     className="w-full border rounded px-2 py-1 text-xs"
                                                                                 >
                                                                                     <option value="">Select axis</option>
-                                                                                    {['X', 'Y', 'Z'].map(axisOption => (
+                                                                                    {AXES.map(axisOption => (
                                                                                         <option key={axisOption} value={axisOption}>{axisOption}</option>
                                                                                     ))}
                                                                                 </select>
@@ -1571,7 +1670,8 @@
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {comparisonExecutions.map(comp => {
                                 const ex = comp.execution;
-                                const stats = getStatistics(ex.timestamps, ex.requirements);
+                                const executionRequirements = mergeExecutionRequirements(ex.requirements);
+                                const stats = getStatistics(ex.timestamps, executionRequirements);
 
                                 return (
                                     <div key={comp.key} className="bg-white rounded-lg shadow p-4">
@@ -1605,7 +1705,7 @@
                                                 <span className="text-gray-600">Count:</span>
                                                 <span className="font-bold">{stats.total}</span>
                                             </div>
-                                            {ex.requirements.enabled && (
+                                            {executionRequirements.enabled && (
                                                 <div className="flex justify-between border-t pt-2">
                                                     <span className="text-gray-600">Pass Rate:</span>
                                                     <span className="font-bold">{stats.passRate.toFixed(1)}%</span>
