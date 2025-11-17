@@ -8,6 +8,16 @@ This document captures the functional evolution of the Hardware Latency Tester f
 - Comparison intelligence calls out requirement sources, pass/fail outcomes, and per-axis deltas so reviewers can reconcile multiple executions quickly (`v4.0-release-notes.md`).
 - Architecture/plan documents detail the upcoming media engine, marker management, pattern recognition, and export upgrades (video/waveform sync, WaveSurfer integration, template-based detection, FFmpeg.wasm packaging, etc.) as captured in `v4.0-architecture.md`.
 
+## [v3.9-rc3] - Release Candidate 3
+- Promotes the sandbox to `release-candidates/latency-tester-v3.9-rc3.html`, pointing the defect view at `v3.9-rc3-defects.json` while preserving the original `v3.9-rc1-defects.json` backlog for reference.
+- Honors manual test-case distance overrides throughout the report and comparison dashboards and surfaces badges that reveal when a template value is supplying the bound.
+- Expands the comparison cards with explicit axis/distance context and upgrades the defect register with ID-aware search plus severity/status filters and summary chips.
+
+## [v3.9-rc2] - Release Candidate 2
+- Spins up `release-candidates/latency-tester-v3.9-rc2.html`, clearly labeling the UI as the second RC build so it is not deployed in production workflows.
+- Adds a reusable hardware bank that mirrors the requirement template workflow, allowing executions and imports to pull device presets instead of re-typing metadata each time.
+- Refreshes the defect register to `release-candidates/v3.9-rc2-defects.json`, carrying the resolved template navigation and report metadata items that shipped earlier in RC1.
+
 ## [v3.9-rc] - Release Candidate
 - Spins up `release-candidates/latency-tester-v3.9-rc.html`, clearly labeling the UI as a release candidate so it is not deployed in production workflows.
 - Adds reusable requirement templates plus the relocated pass/fail controls that were previously prototyped in v3.8.1.

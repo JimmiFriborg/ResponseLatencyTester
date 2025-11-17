@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hardware Latency Tester v3.9 Release Candidate</title>
+    <title>Hardware Latency Tester v3.9 Release Candidate 3</title>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -30,9 +30,14 @@
     <script type="text/babel" data-presets="env,react">
         const { useState, useEffect, useRef } = React;
 
+        const RELEASE_VERSION = 'v3.9 RC3';
+        const DEFECT_REGISTER_FILE = 'v3.9-rc3-defects.json';
+        const DEFECT_EXPORT_FILENAME = 'v3.9-rc3-defects.json';
+
         const AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'];
         const AXES = ['X', 'Y', 'Z'];
         const DISTANCE_AXES = ['X', 'Y', 'Z'];
+        const hasDistanceValue = (value) => value !== undefined && value !== null && value !== '';
         const DEFECT_STATUSES = ['Open', 'Investigating', 'In Progress', 'Blocked', 'Resolved'];
         const DEFECT_SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
 
@@ -54,14 +59,14 @@
             notes: ''
         });
 
-        const createHardwareItem = () => ({
-            id: Date.now().toString() + Math.random(),
-            type: '',
-            version: '',
-            revision: '',
-            serialNumber: '',
-            name: '',
-            notes: ''
+        const createHardwareItem = (overrides = {}) => ({
+            id: overrides.id || (Date.now().toString() + Math.random()),
+            type: overrides.type || '',
+            version: overrides.version || '',
+            revision: overrides.revision || '',
+            serialNumber: overrides.serialNumber || '',
+            name: overrides.name || '',
+            notes: overrides.notes || ''
         });
 
         const getDefaultExecutionRequirements = () => ({
@@ -140,11 +145,16 @@
         };
 
         const normalizeHardwareList = (hardware = []) => {
-            return hardware.map(item => ({
-                ...createHardwareItem(),
-                ...item,
-                id: item.id || (Date.now().toString() + Math.random())
-            }));
+            return hardware.map(item => createHardwareItem(item));
+        };
+
+        const describeHardwarePreset = (hardware) => {
+            if (!hardware) return 'Unnamed hardware';
+            const segments = [];
+            if (hardware.type) segments.push(hardware.type);
+            if (hardware.name) segments.push(hardware.name);
+            if (hardware.serialNumber) segments.push(`#${hardware.serialNumber}`);
+            return segments.length > 0 ? segments.join(' · ') : 'Unnamed hardware';
         };
 
         const LatencyTester = () => {
@@ -153,21 +163,34 @@
             const [activeTestCase, setActiveTestCase] = useState(null);
             const [activeExecution, setActiveExecution] = useState(null);
             const [comparisonExecutions, setComparisonExecutions] = useState([]);
-            const [view, setView] = useState('execution'); // execution, comparison, report, traceability, defects
+            const [view, setView] = useState('execution'); // execution, hardware, comparison, report, traceability, defects, requirements
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
             const [selectedForReport, setSelectedForReport] = useState([]);
             const [requirementTemplates, setRequirementTemplates] = useState(() => [
                 createRequirementTemplate({ name: 'Default Requirements' })
             ]);
+            const [hardwareLibrary, setHardwareLibrary] = useState(() => [
+                createHardwareItem({
+                    id: 'hardware-library-default',
+                    type: 'DUT',
+                    name: 'Reference Controller',
+                    notes: 'Update serial and build info before attaching to runs.'
+                })
+            ]);
+            const [hasUnsavedTemplateChanges, setHasUnsavedTemplateChanges] = useState(false);
             const [traceabilityFilter, setTraceabilityFilter] = useState('');
             const [importDialog, setImportDialog] = useState(null);
             const [defects, setDefects] = useState([]);
             const [defectFilter, setDefectFilter] = useState('');
+            const [defectStatusFilter, setDefectStatusFilter] = useState('all');
+            const [defectSeverityFilter, setDefectSeverityFilter] = useState('all');
+            const [importHardwareLibrarySelection, setImportHardwareLibrarySelection] = useState('');
+            const [executionHardwareLibrarySelection, setExecutionHardwareLibrarySelection] = useState('');
 
             const importRef = useRef(null);
 
             useEffect(() => {
-                fetch('v3.9-rc-defects.json')
+                fetch(DEFECT_REGISTER_FILE)
                     .then(response => response.ok ? response.json() : null)
                     .then(data => {
                         if (data && Array.isArray(data.defects)) {
@@ -181,6 +204,103 @@
 
             const getRequirementTemplateById = (templateId) =>
                 requirementTemplates.find(template => template.id === templateId);
+
+            const markTemplatesDirty = () => setHasUnsavedTemplateChanges(true);
+            const clearTemplateDirtyState = () => setHasUnsavedTemplateChanges(false);
+
+            const confirmTemplateNavigation = () => {
+                if (!hasUnsavedTemplateChanges) {
+                    return true;
+                }
+                const proceed = window.confirm('You have unsaved requirement template edits. They will be saved automatically before continuing. Continue?');
+                if (proceed) {
+                    clearTemplateDirtyState();
+                }
+                return proceed;
+            };
+
+            const runWithTemplateGuard = (action) => {
+                if (view !== 'requirements') {
+                    action();
+                    return true;
+                }
+                if (!confirmTemplateNavigation()) {
+                    return false;
+                }
+                action();
+                return true;
+            };
+
+            const changeView = (nextView) => {
+                if (view === nextView) return;
+                if (view === 'requirements' && nextView !== 'requirements') {
+                    if (!confirmTemplateNavigation()) {
+                        return;
+                    }
+                }
+                setView(nextView);
+            };
+
+            const addHardwareLibraryItem = () => {
+                const preset = createHardwareItem({
+                    name: `Hardware Preset ${hardwareLibrary.length + 1}`
+                });
+                setHardwareLibrary(prev => [...prev, preset]);
+                return preset;
+            };
+
+            const updateHardwareLibraryField = (presetId, field, value) => {
+                setHardwareLibrary(prev => prev.map(item =>
+                    item.id === presetId ? { ...item, [field]: value } : item
+                ));
+            };
+
+            const deleteHardwareLibraryItem = (presetId) => {
+                setHardwareLibrary(prev => prev.filter(item => item.id !== presetId));
+                setImportHardwareLibrarySelection(prev => prev === presetId ? '' : prev);
+                setExecutionHardwareLibrarySelection(prev => prev === presetId ? '' : prev);
+            };
+
+            const instantiateHardwareFromLibrary = (presetId) => {
+                const preset = hardwareLibrary.find(item => item.id === presetId);
+                if (!preset) return null;
+                const { id: _omit, ...rest } = preset;
+                return createHardwareItem(rest);
+            };
+
+            const addHardwarePresetToExecution = (presetId, executionId = activeExecution) => {
+                if (!presetId || !executionId || !activeTestCase) return;
+                const hardware = instantiateHardwareFromLibrary(presetId);
+                if (!hardware) return;
+                setTestCases(prev => prev.map(tc => {
+                    if (tc.id !== activeTestCase) {
+                        return tc;
+                    }
+                    return {
+                        ...tc,
+                        executions: tc.executions.map(ex =>
+                            ex.id === executionId
+                                ? { ...ex, hardware: [...(ex.hardware || []), hardware] }
+                                : ex
+                        )
+                    };
+                }));
+                setExecutionHardwareLibrarySelection('');
+            };
+
+            const addHardwarePresetToImport = (presetId) => {
+                if (!presetId) return;
+                const hardware = instantiateHardwareFromLibrary(presetId);
+                if (!hardware) return;
+                setImportDialog(prev => prev ? ({
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        hardware: [...prev.form.hardware, hardware]
+                    }
+                }) : prev);
+                setImportHardwareLibrarySelection('');
+            };
 
             const cloneTemplateConfig = (templateId) => {
                 const template = getRequirementTemplateById(templateId);
@@ -239,6 +359,7 @@
                     name: `Requirement ${requirementTemplates.length + 1}`
                 });
                 setRequirementTemplates(prev => [...prev, template]);
+                markTemplatesDirty();
                 return template;
             };
 
@@ -248,6 +369,7 @@
                     return;
                 }
                 setRequirementTemplates(prev => prev.filter(template => template.id !== templateId));
+                markTemplatesDirty();
                 setTestCases(prev => prev.map(tc => ({
                     ...tc,
                     requirementTemplateId: tc.requirementTemplateId === templateId ? null : tc.requirementTemplateId,
@@ -260,6 +382,7 @@
             };
 
             const updateRequirementTemplateDetails = (templateId, field, value) => {
+                markTemplatesDirty();
                 setRequirementTemplates(prev => prev.map(template =>
                     template.id === templateId ? { ...template, [field]: value } : template
                 ));
@@ -269,6 +392,7 @@
                 const template = getRequirementTemplateById(templateId);
                 if (!template) return;
                 const nextConfig = applyRequirementConfigChange(template.config, field, value);
+                markTemplatesDirty();
                 setRequirementTemplates(prev => prev.map(item =>
                     item.id === templateId ? { ...item, config: nextConfig } : item
                 ));
@@ -1055,7 +1179,7 @@
 
             const exportDefectsDocument = () => {
                 const payload = {
-                    release: 'v3.9 RC',
+                    release: RELEASE_VERSION,
                     lastUpdated: new Date().toISOString(),
                     defects
                 };
@@ -1063,7 +1187,7 @@
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'v3.9-rc-defects.json';
+                a.download = DEFECT_EXPORT_FILENAME;
                 a.click();
                 URL.revokeObjectURL(url);
             };
@@ -1146,22 +1270,32 @@
                 setImportDialog(null);
             };
 
-            const getDistanceForAxisKey = (testCase, axisKey) => {
+            const getDistanceDetailsForAxisKey = (testCase, axisKey) => {
                 if (!testCase) return null;
                 const axis = axisKey?.[0];
                 if (!axis) return null;
+                const distances = testCase?.distances || {};
+
+                if (hasDistanceValue(distances[axisKey])) {
+                    return { value: distances[axisKey], source: 'manual', scope: axisKey };
+                }
+
+                if (hasDistanceValue(distances[axis])) {
+                    return { value: distances[axis], source: 'manual', scope: axis };
+                }
+
                 const template = getRequirementTemplateById(testCase.requirementTemplateId);
                 const templateValue = template?.config?.mustNotRespondRanges?.[axis];
-                if (templateValue || templateValue === 0) {
-                    return templateValue;
+                if (hasDistanceValue(templateValue)) {
+                    return { value: templateValue, source: 'template', templateName: template?.name || '' };
                 }
-                if (testCase?.distances?.[axisKey] || testCase?.distances?.[axisKey] === 0) {
-                    return testCase.distances[axisKey];
-                }
-                if (testCase?.distances?.[axis] || testCase?.distances?.[axis] === 0) {
-                    return testCase.distances[axis];
-                }
+
                 return null;
+            };
+
+            const getDistanceForAxisKey = (testCase, axisKey) => {
+                const details = getDistanceDetailsForAxisKey(testCase, axisKey);
+                return details ? details.value : null;
             };
 
             const updateTestCaseEnvironmentField = (field, value) => {
@@ -1423,7 +1557,7 @@
                     return [...prev, { key: entryKey, testCaseId, executionId, axisKey }];
                 });
 
-                setView('comparison');
+                changeView('comparison');
             };
 
             const removeFromComparison = (entryKey) => {
@@ -1497,6 +1631,23 @@
                             <Icon name="plus" /> Add Template
                         </button>
                     </div>
+
+                    {hasUnsavedTemplateChanges && (
+                        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded">
+                            <div className="font-semibold">Unsaved template edits</div>
+                            <p className="text-sm mt-1">
+                                Switching to another test case will auto-save these updates. Save now to dismiss this warning.
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <button
+                                    onClick={clearTemplateDirtyState}
+                                    className="px-3 py-1.5 text-sm bg-yellow-600 text-white rounded hover:bg-yellow-700"
+                                >
+                                    Save template changes
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {requirementTemplates.length === 0 ? (
                         <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded">
@@ -1587,12 +1738,128 @@
 
                     <div>
                         <button
-                            onClick={() => setView('execution')}
+                            onClick={() => changeView('execution')}
                             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
                         >
                             Back to Execution View
                         </button>
                     </div>
+                </div>
+            );
+
+            const renderHardwareLibraryView = () => (
+                <div className="p-6 max-w-5xl space-y-6">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <h2 className="text-2xl font-bold">Hardware Bank</h2>
+                            <p className="text-sm text-gray-500">Store DUTs, controllers, and fixtures so executions can reuse them without retyping metadata.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                onClick={addHardwareLibraryItem}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                            >
+                                <Icon name="plus" /> Add Preset
+                            </button>
+                            <button
+                                onClick={() => changeView('execution')}
+                                className="px-4 py-2 border rounded hover:bg-gray-50"
+                            >
+                                Back to Runs
+                            </button>
+                        </div>
+                    </div>
+
+                    {hardwareLibrary.length === 0 ? (
+                        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded">
+                            <p className="text-sm">No hardware presets yet. Use &ldquo;Add Preset&rdquo; to capture your commonly used equipment.</p>
+                        </div>
+                    ) : (
+                        hardwareLibrary.map(hw => (
+                            <div key={hw.id} className="bg-white rounded-lg shadow p-6 space-y-4">
+                                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <div className="text-lg font-semibold">{describeHardwarePreset(hw)}</div>
+                                        <p className="text-xs text-gray-500">Updating any field instantly refreshes the preset.</p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-sm">
+                                        <button
+                                            onClick={() => addHardwarePresetToExecution(hw.id)}
+                                            disabled={!activeTestCase || !activeExecution}
+                                            className={`px-3 py-1.5 rounded border ${(!activeTestCase || !activeExecution) ? 'text-gray-400 border-gray-200 cursor-not-allowed' : 'text-green-700 border-green-200 hover:bg-green-50'}`}
+                                        >
+                                            <Icon name="hard-drive" /> Attach to Active Execution
+                                        </button>
+                                        <button
+                                            onClick={() => deleteHardwareLibraryItem(hw.id)}
+                                            className="px-3 py-1.5 rounded border text-red-600 border-red-200 hover:bg-red-50"
+                                            disabled={hardwareLibrary.length === 1}
+                                        >
+                                            <Icon name="trash-2" /> Remove
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="grid md:grid-cols-3 gap-3">
+                                    <div>
+                                        <label className="text-sm font-medium">Type</label>
+                                        <input
+                                            type="text"
+                                            value={hw.type}
+                                            onChange={(e) => updateHardwareLibraryField(hw.id, 'type', e.target.value)}
+                                            className="w-full border rounded px-2 py-1"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm font-medium">Name</label>
+                                        <input
+                                            type="text"
+                                            value={hw.name}
+                                            onChange={(e) => updateHardwareLibraryField(hw.id, 'name', e.target.value)}
+                                            className="w-full border rounded px-2 py-1"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm font-medium">Serial</label>
+                                        <input
+                                            type="text"
+                                            value={hw.serialNumber}
+                                            onChange={(e) => updateHardwareLibraryField(hw.id, 'serialNumber', e.target.value)}
+                                            className="w-full border rounded px-2 py-1"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="grid md:grid-cols-3 gap-3">
+                                    <div>
+                                        <label className="text-sm font-medium">Version</label>
+                                        <input
+                                            type="text"
+                                            value={hw.version}
+                                            onChange={(e) => updateHardwareLibraryField(hw.id, 'version', e.target.value)}
+                                            className="w-full border rounded px-2 py-1"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm font-medium">Revision</label>
+                                        <input
+                                            type="text"
+                                            value={hw.revision}
+                                            onChange={(e) => updateHardwareLibraryField(hw.id, 'revision', e.target.value)}
+                                            className="w-full border rounded px-2 py-1"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm font-medium">Notes</label>
+                                        <input
+                                            type="text"
+                                            value={hw.notes}
+                                            onChange={(e) => updateHardwareLibraryField(hw.id, 'notes', e.target.value)}
+                                            className="w-full border rounded px-2 py-1"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        ))
+                    )}
                 </div>
             );
 
@@ -1614,7 +1881,7 @@
                                     <Icon name="download" /> Print/Export PDF
                                 </button>
                                 <button
-                                    onClick={() => setView('execution')}
+                                    onClick={() => changeView('execution')}
                                     className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
                                 >
                                     Back
@@ -1643,6 +1910,10 @@
                                     )];
                                     const axisGroups = groupByAxis(allTimestamps);
                                     const reportRequirements = getRequirementConfigForTestCase(tc);
+                                    const reportTemplate = tc.requirementTemplateId
+                                        ? getRequirementTemplateById(tc.requirementTemplateId)
+                                        : null;
+                                    const requirementTemplateName = reportTemplate?.name || 'Custom requirements';
 
                                     return (
                                         <div key={tc.id} className="mb-12 page-break-after">
@@ -1676,8 +1947,41 @@
                                                     <div>
                                                         <span className="font-medium">Primary DUT:</span> {tc.environment?.dut || 'N/A'}
                                                     </div>
+                                                    <div className="col-span-2">
+                                                        <span className="font-medium">Requirement Template:</span> {requirementTemplateName}
+                                                    </div>
                                                 </div>
                                             </div>
+
+                                            {reportRequirements && (
+                                                <div className="mb-6">
+                                                    <h3 className="text-lg font-semibold mb-2">Requirement Template</h3>
+                                                    <div className="bg-gray-50 border rounded-lg p-4 text-sm space-y-3">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                            <span className="font-medium">{requirementTemplateName}</span>
+                                                            <span className={reportRequirements.enabled ? 'text-green-700 font-semibold' : 'text-gray-500 font-semibold'}>
+                                                                {reportRequirements.enabled ? 'Enabled' : 'Disabled'}
+                                                            </span>
+                                                        </div>
+                                                        {reportTemplate?.description && (
+                                                            <p className="text-gray-600">{reportTemplate.description}</p>
+                                                        )}
+                                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                                            <div>
+                                                                <p className="text-xs uppercase text-gray-500 tracking-wide">Max Latency</p>
+                                                                <p className="font-mono font-bold">{reportRequirements.maxLatency} ms</p>
+                                                            </div>
+                                                            {AXES.map(axis => (
+                                                                <div key={`${tc.id}-${axis}`}>
+                                                                    <p className="text-xs uppercase text-gray-500 tracking-wide">{axis} Axis</p>
+                                                                    <p className="font-semibold">Min Respond: {reportRequirements.minRespondRanges[axis]} mm</p>
+                                                                    <p className="text-gray-600">Must NOT respond beyond {reportRequirements.mustNotRespondRanges[axis]} mm</p>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             {/* Tested Distances */}
                                             {tc.distances && Object.keys(tc.distances).length > 0 && (
@@ -1785,7 +2089,8 @@
                                                             const axisStats = !isUngrouped
                                                                 ? getAxisStatistics(allTimestamps, axis, direction, reportRequirements)
                                                                 : getStatistics(axisTimestamps, reportRequirements);
-                                                            const axisDistance = !isUngrouped ? getDistanceForAxisKey(tc, axisKey) : null;
+                                                            const axisDistanceDetails = !isUngrouped ? getDistanceDetailsForAxisKey(tc, axisKey) : null;
+                                                            const axisDistance = axisDistanceDetails?.value ?? null;
                                                             const requirementRange = (!isUngrouped && reportRequirements)
                                                                 ? {
                                                                     minRespond: reportRequirements.minRespondRanges?.[axis],
@@ -1832,7 +2137,19 @@
                                                                             <div className="text-sm text-gray-600 flex flex-wrap gap-4 mt-2">
                                                                                 {!isUngrouped && (
                                                                                     <>
-                                                                                        <span>Distance: {axisDistance != null ? `${axisDistance}mm` : 'N/A'}</span>
+                                                                                        <span className="flex flex-wrap items-center gap-2">
+                                                                                            <span>Distance: {axisDistance != null ? `${axisDistance}mm` : 'N/A'}</span>
+                                                                                            {axisDistanceDetails?.source === 'manual' && (
+                                                                                                <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">
+                                                                                                    Manual override
+                                                                                                </span>
+                                                                                            )}
+                                                                                            {axisDistanceDetails?.source === 'template' && (
+                                                                                                <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                                                                                                    Template{axisDistanceDetails.templateName ? ` · ${axisDistanceDetails.templateName}` : ''}
+                                                                                                </span>
+                                                                                            )}
+                                                                                        </span>
                                                                                         {reportRequirements?.maxLatency != null && (
                                                                                             <span>Max Latency ≤ {reportRequirements.maxLatency}ms</span>
                                                                                         )}
@@ -1947,8 +2264,14 @@
             const renderDefectView = () => {
                 const normalizedFilter = defectFilter.trim().toLowerCase();
                 const filteredDefects = defects.filter(defect => {
+                    const matchesStatus = defectStatusFilter === 'all' || defect.status === defectStatusFilter;
+                    const matchesSeverity = defectSeverityFilter === 'all' || defect.severity === defectSeverityFilter;
+                    if (!matchesStatus || !matchesSeverity) {
+                        return false;
+                    }
                     if (!normalizedFilter) return true;
                     const haystack = [
+                        defect.id,
                         defect.title,
                         defect.description,
                         defect.status,
@@ -1957,6 +2280,8 @@
                     ].join(' ').toLowerCase();
                     return haystack.includes(normalizedFilter);
                 });
+                const openDefects = defects.filter(defect => defect.status !== 'Resolved').length;
+                const resolvedDefects = defects.length - openDefects;
 
                 return (
                     <div className="p-6 space-y-6">
@@ -1965,7 +2290,7 @@
                             <div>
                                 <h2 className="text-lg font-semibold text-amber-900">Release Candidate Only</h2>
                                 <p className="text-sm text-amber-800">
-                                    This build is provided as Hardware Latency Tester v3.9 Release Candidate.
+                                    This build is provided as Hardware Latency Tester {RELEASE_VERSION}.
                                     Please avoid using it in production until all open defects are resolved.
                                 </p>
                             </div>
@@ -1974,9 +2299,9 @@
                         <div className="bg-white rounded-lg shadow p-4">
                             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-4">
                                 <div>
-                                    <h2 className="text-2xl font-bold">v3.9 RC Defect Register</h2>
+                                    <h2 className="text-2xl font-bold">{RELEASE_VERSION} Defect Register</h2>
                                     <p className="text-sm text-gray-500">
-                                        Track and update issues discovered while evaluating this release candidate.
+                                        Track and update issues discovered while evaluating this release candidate build.
                                     </p>
                                 </div>
                                 <div className="flex flex-wrap gap-2">
@@ -1984,9 +2309,29 @@
                                         type="text"
                                         value={defectFilter}
                                         onChange={(e) => setDefectFilter(e.target.value)}
-                                        placeholder="Filter defects"
+                                        placeholder="Search by ID, title, owner, status"
                                         className="px-3 py-2 border rounded"
                                     />
+                                    <select
+                                        value={defectStatusFilter}
+                                        onChange={(e) => setDefectStatusFilter(e.target.value)}
+                                        className="px-3 py-2 border rounded"
+                                    >
+                                        <option value="all">All statuses</option>
+                                        {DEFECT_STATUSES.map(status => (
+                                            <option key={status} value={status}>{status}</option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={defectSeverityFilter}
+                                        onChange={(e) => setDefectSeverityFilter(e.target.value)}
+                                        className="px-3 py-2 border rounded"
+                                    >
+                                        <option value="all">All severities</option>
+                                        {DEFECT_SEVERITIES.map(severity => (
+                                            <option key={severity} value={severity}>{severity}</option>
+                                        ))}
+                                    </select>
                                     <button
                                         onClick={addDefect}
                                         className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -2000,6 +2345,15 @@
                                     >
                                         <Icon name="download" /> Save Document
                                     </button>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3 text-xs text-gray-600">
+                                    <span>Showing {filteredDefects.length} of {defects.length} defects</span>
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
+                                        <Icon name="alert-circle" /> {openDefects} Open
+                                    </span>
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">
+                                        <Icon name="check-circle" /> {resolvedDefects} Resolved
+                                    </span>
                                 </div>
                             </div>
 
@@ -2095,7 +2449,7 @@
                         <div className="bg-white rounded-lg shadow p-4 text-sm text-gray-600">
                             <p>
                                 The canonical defect register for this release candidate lives at
-                                <code className="mx-1 bg-gray-100 px-1 py-0.5 rounded">release-candidates/v3.9-rc-defects.json</code>.
+                                <code className="mx-1 bg-gray-100 px-1 py-0.5 rounded">release-candidates/v3.9-rc3-defects.json</code>.
                                 You can edit that file directly in a text editor or synchronize it by importing and exporting
                                 from the GUI controls above.
                             </p>
@@ -2237,15 +2591,44 @@
                                 </div>
 
                                 <div>
-                                    <div className="flex items-center justify-between mb-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                                         <h3 className="font-semibold">Test Hardware</h3>
-                                        <button
-                                            onClick={addHardwareToImport}
-                                            className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                                        >
-                                            <Icon name="plus" /> Add Hardware
-                                        </button>
+                                        <div className="flex flex-wrap gap-2">
+                                            <button
+                                                onClick={() => changeView('hardware')}
+                                                className="px-3 py-1.5 border rounded hover:bg-gray-50 text-sm"
+                                            >
+                                                <Icon name="hard-drive" /> Manage Bank
+                                            </button>
+                                            <button
+                                                onClick={addHardwareToImport}
+                                                className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                                            >
+                                                <Icon name="plus" /> Add Hardware
+                                            </button>
+                                        </div>
                                     </div>
+                                    {hardwareLibrary.length > 0 && (
+                                        <div className="flex flex-col md:flex-row gap-2 mb-3">
+                                            <select
+                                                className="flex-1 border rounded px-3 py-1.5 text-sm"
+                                                value={importHardwareLibrarySelection}
+                                                onChange={(e) => setImportHardwareLibrarySelection(e.target.value)}
+                                            >
+                                                <option value="">Select a hardware preset</option>
+                                                {hardwareLibrary.map(hw => (
+                                                    <option key={hw.id} value={hw.id}>{describeHardwarePreset(hw)}</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={() => addHardwarePresetToImport(importHardwareLibrarySelection)}
+                                                disabled={!importHardwareLibrarySelection}
+                                                className={`px-3 py-1.5 text-sm rounded ${importHardwareLibrarySelection ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                                            >
+                                                <Icon name="plus" /> Add from Bank
+                                            </button>
+                                        </div>
+                                    )}
                                     {form.hardware.length === 0 ? (
                                         <p className="text-sm text-gray-500">No hardware linked yet.</p>
                                     ) : (
@@ -2346,12 +2729,12 @@
                             <div className="text-center">
                                 <p className="text-gray-500 text-lg mb-4">No test case loaded</p>
                                 <button
-                                    onClick={() => {
+                                    onClick={() => runWithTemplateGuard(() => {
                                         const newTC = createNewTestCase();
                                         setTestCases([...testCases, newTC]);
                                         setActiveTestCase(newTC.id);
                                         setActiveExecution(newTC.executions[0].id);
-                                    }}
+                                    })}
                                     className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                                 >
                                     <Icon name="plus" /> Create New Test Case
@@ -2526,7 +2909,7 @@
                                         Apply to All
                                     </button>
                                     <button
-                                        onClick={() => setView('requirements')}
+                                        onClick={() => changeView('requirements')}
                                         className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
                                     >
                                         Manage Templates
@@ -2638,15 +3021,44 @@
 
                         {/* Execution Hardware */}
                         <div className="bg-white rounded-lg shadow p-4 mb-4">
-                            <div className="flex items-center justify-between mb-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                                 <h3 className="font-semibold">Execution Hardware</h3>
-                                <button
-                                    onClick={addHardwareToExecution}
-                                    className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-                                >
-                                    <Icon name="plus" /> Add Hardware
-                                </button>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => changeView('hardware')}
+                                        className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
+                                    >
+                                        <Icon name="hard-drive" /> Manage Bank
+                                    </button>
+                                    <button
+                                        onClick={addHardwareToExecution}
+                                        className="px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                                    >
+                                        <Icon name="plus" /> Add Hardware
+                                    </button>
+                                </div>
                             </div>
+                            {hardwareLibrary.length > 0 && (
+                                <div className="flex flex-col md:flex-row gap-2 mb-3">
+                                    <select
+                                        className="flex-1 border rounded px-3 py-1.5 text-sm"
+                                        value={executionHardwareLibrarySelection}
+                                        onChange={(e) => setExecutionHardwareLibrarySelection(e.target.value)}
+                                    >
+                                        <option value="">Select a hardware preset</option>
+                                        {hardwareLibrary.map(hw => (
+                                            <option key={hw.id} value={hw.id}>{describeHardwarePreset(hw)}</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        onClick={() => addHardwarePresetToExecution(executionHardwareLibrarySelection)}
+                                        disabled={!executionHardwareLibrarySelection}
+                                        className={`px-3 py-1.5 text-sm rounded ${executionHardwareLibrarySelection ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                                    >
+                                        <Icon name="plus" /> Add from Bank
+                                    </button>
+                                </div>
+                            )}
                             {(!currentExecution.hardware || currentExecution.hardware.length === 0) ? (
                                 <p className="text-sm text-gray-500">No hardware linked. Use the button above to add devices.</p>
                             ) : (
@@ -2872,7 +3284,8 @@
                                     const axisStats = isUngrouped
                                         ? getStatistics(axisTimestamps, requirements)
                                         : getAxisStatistics(axisTimestamps, axis, direction, requirements);
-                                    const distance = !isUngrouped ? getDistanceForAxisKey(currentTestCase, axisKey) : null;
+                                    const distanceDetails = !isUngrouped ? getDistanceDetailsForAxisKey(currentTestCase, axisKey) : null;
+                                    const distance = distanceDetails?.value ?? null;
                                     const axisHasComparableSamples = axisTimestamps.some(ts =>
                                         !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
                                     );
@@ -2882,10 +3295,18 @@
                                             <div className="p-4 bg-gray-50 border-b">
                                                 <div className="flex items-center justify-between flex-wrap gap-2">
                                                     <div className="flex items-center flex-wrap gap-2">
-                                                        <h3 className="font-semibold flex items-center gap-2">
-                                                            {axisKey}
-                                                            {!isUngrouped && distance && (
+                                                        <h3 className="font-semibold flex items-center gap-2 flex-wrap">
+                                                            <span>{axisKey}</span>
+                                                            {!isUngrouped && distance !== null && (
                                                                 <span className="text-sm text-gray-600">({distance}mm)</span>
+                                                            )}
+                                                            {!isUngrouped && distanceDetails?.source === 'manual' && (
+                                                                <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">Manual override</span>
+                                                            )}
+                                                            {!isUngrouped && distanceDetails?.source === 'template' && (
+                                                                <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                                                                    Template{distanceDetails.templateName ? ` · ${distanceDetails.templateName}` : ''}
+                                                                </span>
                                                             )}
                                                         </h3>
                                                         {isUngrouped && (
@@ -3218,13 +3639,33 @@
                                 const stats = getStatistics(filteredTimestamps, executionRequirements);
                                 const axisLabel = comp.axisKey ? `${comp.axisKey} axis` : 'All axes';
                                 const heading = comp.axisKey ? `${ex.name} · ${comp.axisKey}` : ex.name;
+                                const axisDistanceDetails = comp.axisKey ? getDistanceDetailsForAxisKey(tc, comp.axisKey) : null;
+                                const axisDistance = axisDistanceDetails?.value ?? null;
+                                const axisDistanceBadgeClass = axisDistanceDetails?.source === 'template'
+                                    ? 'bg-indigo-100 text-indigo-800'
+                                    : 'bg-emerald-100 text-emerald-800';
+                                const axisDistanceBadgeLabel = axisDistanceDetails?.source === 'template'
+                                    ? `Template${axisDistanceDetails?.templateName ? ` · ${axisDistanceDetails.templateName}` : ''}`
+                                    : 'Manual override';
 
                                 return (
                                     <div key={comp.key} className="bg-white rounded-lg shadow p-4">
                                         <div className="flex items-center justify-between mb-3">
                                             <div>
                                                 <h3 className="font-semibold">{tc.name}</h3>
-                                                <p className="text-sm text-gray-600">{heading}</p>
+                                                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
+                                                    <span>{heading}</span>
+                                                    {comp.axisKey && (
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">
+                                                            Axis {comp.axisKey}
+                                                        </span>
+                                                    )}
+                                                    {comp.axisKey && axisDistance !== null && (
+                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${axisDistanceBadgeClass}`}>
+                                                            {axisDistance}mm · {axisDistanceBadgeLabel}
+                                                        </span>
+                                                    )}
+                                                </div>
                                                 <p className="text-xs text-gray-500">{axisLabel}</p>
                                             </div>
                                             <button
@@ -3279,9 +3720,9 @@
                             <div className="flex items-center justify-between">
                                 <div>
                                     <h1 className="text-2xl font-bold">Hardware Latency Tester</h1>
-                                    <p className="text-blue-100 text-sm font-semibold">v3.9 Release Candidate (Evaluation Only)</p>
+                                    <p className="text-blue-100 text-sm font-semibold">v3.9 Release Candidate 3 (Evaluation Only)</p>
                                     <p className="text-xs text-amber-200 uppercase tracking-wide flex items-center gap-1">
-                                        <Icon name="alert-triangle" /> Release Candidate - not approved for production
+                                        <Icon name="alert-triangle" /> Release Candidate 3 - not approved for production
                                     </p>
                                 </div>
                                 <div className="flex space-x-2">
@@ -3315,31 +3756,37 @@
                         {/* Navigation */}
                         <div className="px-6 flex space-x-1 border-t border-blue-500">
                             <button
-                                onClick={() => setView('execution')}
+                                onClick={() => changeView('execution')}
                                 className={`px-4 py-2 ${view === 'execution' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
                             >
                                 <Icon name="bar-chart" /> Execution
                             </button>
                             <button
-                                onClick={() => setView('comparison')}
+                                onClick={() => changeView('hardware')}
+                                className={`px-4 py-2 ${view === 'hardware' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
+                            >
+                                <Icon name="hard-drive" /> Hardware Bank
+                            </button>
+                            <button
+                                onClick={() => changeView('comparison')}
                                 className={`px-4 py-2 ${view === 'comparison' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
                             >
                                 <Icon name="git-compare" /> Comparison ({comparisonExecutions.length})
                             </button>
                             <button
-                                onClick={() => setView('traceability')}
+                                onClick={() => changeView('traceability')}
                                 className={`px-4 py-2 ${view === 'traceability' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
                             >
                                 <Icon name="hard-drive" /> Devices
                             </button>
                             <button
-                                onClick={() => setView('report')}
+                                onClick={() => changeView('report')}
                                 className={`px-4 py-2 ${view === 'report' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
                             >
                                 <Icon name="file-text" /> Report
                             </button>
                             <button
-                                onClick={() => setView('defects')}
+                                onClick={() => changeView('defects')}
                                 className={`px-4 py-2 ${view === 'defects' ? 'bg-blue-700' : 'hover:bg-blue-700'}`}
                             >
                                 <Icon name="alert-triangle" /> Defects ({defects.length})
@@ -3356,13 +3803,13 @@
                                     <div className="mb-4">
                                         <h3 className="font-semibold mb-2">Test Cases</h3>
                                         <button
-                                            onClick={() => {
+                                            onClick={() => runWithTemplateGuard(() => {
                                                 const newTC = createNewTestCase();
                                                 const firstExecution = newTC.executions[0];
                                                 setTestCases([...testCases, newTC]);
                                                 setActiveTestCase(newTC.id);
                                                 setActiveExecution(firstExecution?.id);
-                                            }}
+                                            })}
                                             className="w-full px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 mb-2 text-sm"
                                         >
                                             <Icon name="plus" /> New Test Case
@@ -3371,12 +3818,12 @@
                                             {testCases.map(tc => (
                                                 <div key={tc.id}>
                                                     <div
-                                                        onClick={() => {
+                                                        onClick={() => runWithTemplateGuard(() => {
                                                             setActiveTestCase(tc.id);
                                                             if (tc.executions.length > 0) {
                                                                 setActiveExecution(tc.executions[0].id);
                                                             }
-                                                        }}
+                                                        })}
                                                         className={`px-3 py-2 rounded cursor-pointer text-sm truncate ${
                                                             activeTestCase === tc.id ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-100'
                                                         }`}
@@ -3389,7 +3836,7 @@
                                                             {tc.executions.map(ex => (
                                                                 <div
                                                                     key={ex.id}
-                                                                    onClick={() => setActiveExecution(ex.id)}
+                                                                    onClick={() => runWithTemplateGuard(() => setActiveExecution(ex.id))}
                                                                     className={`px-2 py-1 rounded cursor-pointer text-xs truncate ${
                                                                         activeExecution === ex.id ? 'bg-green-100 font-medium' : 'hover:bg-gray-50'
                                                                     }`}
@@ -3399,14 +3846,14 @@
                                                                 </div>
                                                             ))}
                                                             <button
-                                                                onClick={() => {
+                                                                onClick={() => runWithTemplateGuard(() => {
                                                                     const templateId = tc.requirementTemplateId;
                                                                     const templateConfig = ensureTemplateConfig(templateId);
                                                                     const newEx = createNewExecution(tc, templateConfig, templateId);
                                                                     tc.executions.push(newEx);
                                                                     setTestCases([...testCases]);
                                                                     setActiveExecution(newEx.id);
-                                                                }}
+                                                                })}
                                                                 className="w-full px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs"
                                                             >
                                                                 + New Execution
@@ -3423,6 +3870,8 @@
 
                         {/* Main View */}
                         <div className="flex-1">
+                            {view === 'requirements' && renderRequirementsView()}
+                            {view === 'hardware' && renderHardwareLibraryView()}
                             {view === 'execution' && renderExecutionView()}
                             {view === 'comparison' && renderComparisonView()}
                             {view === 'traceability' && renderTraceabilityView()}
