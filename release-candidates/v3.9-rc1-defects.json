@@ -1,4 +1,36 @@
 {
+  "release": "v3.9 RC1",
+  "lastUpdated": "2024-05-02T12:00:00.000Z",
+  "defects": [
+    {
+      "id": "DEF-003",
+      "title": "Manual distances ignored when templates also define ranges",
+      "description": "If a tester records axis distances inside a test case, the report and comparison views continue to show the template's \"must not respond\" range instead of the recorded override, making it impossible to validate the actual field measurements.",
+      "severity": "Medium",
+      "status": "Open",
+      "owner": "QA",
+      "lastUpdated": "2024-05-02T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-004",
+      "title": "Comparison cards hide axis context",
+      "description": "When an execution is added to the comparison dashboard with a specific axis filter, the card never shows which axis/direction or distance bounds were applied. Reviewers cannot tell why runs fail without opening the original test case.",
+      "severity": "Low",
+      "status": "Open",
+      "owner": "Systems",
+      "lastUpdated": "2024-05-02T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-005",
+      "title": "Defect register search ignores IDs and severities",
+      "description": "The defect register only filters on titles/descriptions. QA cannot quickly isolate Critical defects or look up tickets by their ID, forcing manual scans of long lists.",
+      "severity": "Medium",
+      "status": "Open",
+      "owner": "QA",
+      "lastUpdated": "2024-05-02T12:00:00.000Z"
+    }
+  ]
+}
   "release": "v3.9 RC",
   "lastUpdated": "2025-11-17T11:02:39.278Z",
   "defects": [
