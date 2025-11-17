@@ -8,6 +8,12 @@ This document captures the functional evolution of the Hardware Latency Tester f
 - Comparison intelligence calls out requirement sources, pass/fail outcomes, and per-axis deltas so reviewers can reconcile multiple executions quickly (`v4.0-release-notes.md`).
 - Architecture/plan documents detail the upcoming media engine, marker management, pattern recognition, and export upgrades (video/waveform sync, WaveSurfer integration, template-based detection, FFmpeg.wasm packaging, etc.) as captured in `v4.0-architecture.md`.
 
+## [v3.9-rc] - Release Candidate
+- Spins up `release-candidates/latency-tester-v3.9-rc.html`, clearly labeling the UI as a release candidate so it is not deployed in production workflows.
+- Adds reusable requirement templates plus the relocated pass/fail controls that were previously prototyped in v3.8.1.
+- Introduces a built-in defect register view that reads/writes `release-candidates/v3.9-rc-defects.json`, allowing QA to edit the canonical document directly or through the GUI.
+- Reorganizes the repository structure so deprecated builds and docs live under `archive/`, keeping the root scoped to the production build, current RC, and planning artifacts.
+
 ## [v3.8.1] - Professional Edition Patch 1
 - Fixes the duplicate execution-deletion helper and stray closing tags that prevented `latency-tester-v3.8.html` from loading in modern browsers. The deduped helper now accepts an optional test-case override so execution CRUD continues to work from any context.
 - Produces a dedicated `latency-tester-v3.8.1.html` build (with matching UI copy) plus a redirecting `latency-tester-v3.8.html` shim so bookmarks continue to resolve after the patch upgrade.

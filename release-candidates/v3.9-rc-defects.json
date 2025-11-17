@@ -1,0 +1,24 @@
+{
+  "release": "v3.9 RC",
+  "lastUpdated": "2024-05-05T12:00:00.000Z",
+  "defects": [
+    {
+      "id": "DEF-001",
+      "title": "Requirement edits lost when switching test cases",
+      "description": "Switching test cases before saving a shared requirement template discards unsaved changes. Warn users or auto-save the template before navigation.",
+      "severity": "Medium",
+      "status": "Open",
+      "owner": "QA",
+      "lastUpdated": "2024-05-05T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-002",
+      "title": "Report tab omits template metadata",
+      "description": "Traceability report does not list the requirement template name being applied which makes auditing difficult.",
+      "severity": "Low",
+      "status": "Investigating",
+      "owner": "Systems",
+      "lastUpdated": "2024-05-05T12:30:00.000Z"
+    }
+  ]
+}
