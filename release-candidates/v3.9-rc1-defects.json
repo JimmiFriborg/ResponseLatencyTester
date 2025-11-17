@@ -1,0 +1,78 @@
+{
+  "release": "v3.9 RC",
+  "lastUpdated": "2025-11-17T11:02:39.278Z",
+  "defects": [
+    {
+      "id": "1763372007506_defect",
+      "title": "Requirement Templates",
+      "description": "Clicking \"Manage Templates\" in Pass/Fail Requirements shows a blank page and removes the input data from Test Case. ",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:34:53.038Z"
+    },
+    {
+      "id": "1763372095608_defect",
+      "title": "Test Case too noisy",
+      "description": "Test Case information are always shown together with Test Execution information, but user has to tune it out. It's necessary information for the test case, but for the test execution it's visual noise. \n- Group Test Case information together and get it a bit out of the way to put focus on test execution details.\n- Make it obvious what is Test Case information and what is Test Execution information",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:35:46.897Z"
+    },
+    {
+      "id": "1763372152108_defect",
+      "title": "Add Comparison->New view",
+      "description": "Clicking on \"Compare Axis\" takes user to Compare view forcing user to navigate back to the Test Execution and selecting the next Axis. If all 6 axis are to be compared for multiple test executions, this is too exhausting. \n\nWhen adding a TEst Execution to comparisson, prompt user which axis they want to compare. Make it selectable in Comparison as well (checkboxes) ",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:39:33.705Z"
+    },
+    {
+      "id": "1763372374727_defect",
+      "title": "Comparison View",
+      "description": "Comparison should be a view allowing to easily compare results of similar test executions and test cases.\nUpdate Comparison to better fit into this mandate.",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:47:40.908Z"
+    },
+    {
+      "id": "1763372468135_defect",
+      "title": "Select for comparison",
+      "description": "The Add to comparison button is placed in the head by the import/export buttons - This should be a Test execution specific button. Or Test Case and then select which test executions to add to comparison",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:47:42.071Z"
+    },
+    {
+      "id": "1763372544773_defect",
+      "title": "Importing data to existing execution",
+      "description": "When importing data allow for it to be added to existing test execution. If data already exist in the selected execution, prompt to append the data, overwrite or cancel (allowing to create a new execution instead)",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:47:42.957Z"
+    },
+    {
+      "id": "1763372729398_defect",
+      "title": "Copy Test Case Details",
+      "description": "Add function to duplicate Test Case including Test Case information. Prompt if user want's to duplicate Test Execution data as well",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:47:43.991Z"
+    },
+    {
+      "id": "1763372836467_defect",
+      "title": "Copy Test Execution detailes",
+      "description": "Allow copying test details like Pass/Fail Requirements, Execution Hardware when Creating new test executions inside a test case.",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-17T09:47:44.693Z"
+    }
+  ]
+}
