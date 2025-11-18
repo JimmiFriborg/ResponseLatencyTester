@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hardware Latency Tester v3.9 Release Candidate 3</title>
+    <title>Hardware Latency Tester v3.9 Release Candidate 4</title>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -43,9 +43,9 @@
         const deriveSessionDiffStatus = sessionDiffUtils.deriveSessionDiffStatus || (() => ({ status: 'idle', message: 'Session diff helpers unavailable.' }));
         const CompareSessionsSummary = window.CompareSessionsSummary;
 
-        const RELEASE_VERSION = 'v3.9 RC3';
-        const DEFECT_REGISTER_FILE = 'v3.9-rc3-defects.json';
-        const DEFECT_EXPORT_FILENAME = 'v3.9-rc3-defects.json';
+        const RELEASE_VERSION = 'v3.9 RC4';
+        const DEFECT_REGISTER_FILE = 'v3.9-rc4-defects.json';
+        const DEFECT_EXPORT_FILENAME = 'v3.9-rc4-defects.json';
 
         const AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'];
         const AXES = ['X', 'Y', 'Z'];
@@ -3115,7 +3115,7 @@
                         <div className="bg-white rounded-lg shadow p-4 text-sm text-gray-600">
                             <p>
                                 The canonical defect register for this release candidate lives at
-                                <code className="mx-1 bg-gray-100 px-1 py-0.5 rounded">release-candidates/v3.9-rc3-defects.json</code>.
+                                <code className="mx-1 bg-gray-100 px-1 py-0.5 rounded">release-candidates/v3.9-rc4-defects.json</code>.
                                 You can edit that file directly in a text editor or synchronize it by importing and exporting
                                 from the GUI controls above.
                             </p>
@@ -4867,9 +4867,9 @@
                             <div className="flex items-center justify-between">
                                 <div>
                                     <h1 className="text-2xl font-bold">Hardware Latency Tester</h1>
-                                    <p className="text-blue-100 text-sm font-semibold">v3.9 Release Candidate 3 (Evaluation Only)</p>
+                                    <p className="text-blue-100 text-sm font-semibold">v3.9 Release Candidate 4 (Evaluation Only)</p>
                                     <p className="text-xs text-amber-200 uppercase tracking-wide flex items-center gap-1">
-                                        <Icon name="alert-triangle" /> Release Candidate 3 - not approved for production
+                                        <Icon name="alert-triangle" /> Release Candidate 4 - not approved for production
                                     </p>
                                 </div>
                                 <div className="flex space-x-2">
