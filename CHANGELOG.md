@@ -12,6 +12,8 @@ This document captures the functional evolution of the Hardware Latency Tester f
 - Promotes the sandbox to `release-candidates/latency-tester-v3.9-rc3.html`, pointing the defect view at `v3.9-rc3-defects.json` while preserving the original `v3.9-rc1-defects.json` backlog for reference.
 - Honors manual test-case distance overrides throughout the report and comparison dashboards and surfaces badges that reveal when a template value is supplying the bound.
 - Expands the comparison cards with explicit axis/distance context and upgrades the defect register with ID-aware search plus severity/status filters and summary chips.
+- Adds a dedicated axis comparison matrix with direction-specific highlights so reviewers can line up the same axis across multiple executions without digging through each card.
+- Surfaces FPS detection sources and lets users re-run the latency math whenever a CSV fell back to the 30 fps default, eliminating the 1.500s rounding issues seen on high-frame-rate clips.
 
 ## [v3.9-rc2] - Release Candidate 2
 - Spins up `release-candidates/latency-tester-v3.9-rc2.html`, clearly labeling the UI as the second RC build so it is not deployed in production workflows.

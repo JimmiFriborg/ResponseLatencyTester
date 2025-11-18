@@ -163,6 +163,7 @@
             const [activeTestCase, setActiveTestCase] = useState(null);
             const [activeExecution, setActiveExecution] = useState(null);
             const [comparisonExecutions, setComparisonExecutions] = useState([]);
+            const [selectedComparisonAxis, setSelectedComparisonAxis] = useState(null);
             const [view, setView] = useState('execution'); // execution, hardware, comparison, report, traceability, defects, requirements
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
             const [selectedForReport, setSelectedForReport] = useState([]);
@@ -201,6 +202,16 @@
                         // When running from file:// the fetch will fail silently.
                     });
             }, []);
+
+            useEffect(() => {
+                setSelectedComparisonAxis(prev => {
+                    if (prev && comparisonExecutions.some(entry => entry.axisKey === prev)) {
+                        return prev;
+                    }
+                    const firstAxis = comparisonExecutions.find(entry => entry.axisKey)?.axisKey || null;
+                    return firstAxis || null;
+                });
+            }, [comparisonExecutions]);
 
             const getRequirementTemplateById = (templateId) =>
                 requirementTemplates.find(template => template.id === templateId);
@@ -468,23 +479,78 @@
             };
 
             // Parse timecode with FPS defaulting
-            const parseTimecode = (timecode, fps = 30) => {
-                const parts = timecode.split(':');
-                if (parts.length !== 4) return 0;
+        const parseTimecode = (timecode, fps = 30) => {
+            if (!timecode) return 0;
+            const safeFps = (typeof fps === 'number' ? fps : parseFloat(fps)) || 30;
+            const sanitized = timecode.toString().trim();
+            if (!sanitized) return 0;
 
+            const parts = sanitized.split(':');
+
+            if (parts.length === 4) {
                 const hours = parseInt(parts[0]) || 0;
                 const minutes = parseInt(parts[1]) || 0;
                 const seconds = parseInt(parts[2]) || 0;
                 const frames = parseInt(parts[3]) || 0;
-
                 const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
-                const frameTime = frames / fps;
-
+                const frameTime = frames / safeFps;
                 return (totalSeconds + frameTime) * 1000;
-            };
+            }
 
-            const msToSecondsFormat = (ms) => (ms / 1000).toFixed(3);
-            const formatMsToTime = (ms) => (!ms && ms !== 0) ? '-' : (ms / 1000).toFixed(3) + 's';
+            if (parts.length === 3) {
+                const hoursOrMinutes = parseInt(parts[0]) || 0;
+                const minutesOrSeconds = parseInt(parts[1]) || 0;
+                const frames = parseInt(parts[2]) || 0;
+                // Treat the three-part form as MM:SS:FF with an implied hour of 0.
+                const totalSeconds = (hoursOrMinutes * 60) + minutesOrSeconds;
+                const frameTime = frames / safeFps;
+                return (totalSeconds + frameTime) * 1000;
+            }
+
+            if (parts.length === 2) {
+                const minutes = parseInt(parts[0]) || 0;
+                const seconds = parseFloat(parts[1]) || 0;
+                return ((minutes * 60) + seconds) * 1000;
+            }
+
+            const numericValue = parseFloat(sanitized);
+            if (!isNaN(numericValue)) {
+                return numericValue * 1000;
+            }
+
+            return 0;
+        };
+
+        const msToSecondsFormat = (ms) => (ms / 1000).toFixed(3);
+        const formatMsToTime = (ms) => (!ms && ms !== 0) ? '-' : (ms / 1000).toFixed(3) + 's';
+
+        const recalculateLatenciesForFps = (timestamps = [], fpsValue) => {
+            const numericFps = parseFloat(fpsValue);
+            if (!numericFps || !isFinite(numericFps) || numericFps <= 0) {
+                return timestamps;
+            }
+
+            return timestamps.map(ts => {
+                if (!ts.recordIn || !ts.pairedRecordIn || ts.isError) {
+                    return ts;
+                }
+
+                const startMs = parseTimecode(ts.recordIn, numericFps);
+                const endMs = parseTimecode(ts.pairedRecordIn, numericFps);
+
+                if (!isFinite(startMs) || !isFinite(endMs) || endMs < startMs) {
+                    return ts;
+                }
+
+                const latencyMs = endMs - startMs;
+                return {
+                    ...ts,
+                    latencyMs,
+                    latency: msToSecondsFormat(latencyMs),
+                    calculationExplained: `${ts.recordIn} → ${ts.pairedRecordIn} @ ${numericFps}fps = ${msToSecondsFormat(latencyMs)}`
+                };
+            });
+        };
 
             // Parse marker naming
             function parseMarkerName(markerName) {
@@ -559,13 +625,15 @@
                 // Parse all data rows
                 const dataRows = [];
                 let detectedFPS = 30; // Default FPS
+                let fpsSource = 'default';
 
                 for (let i = 1; i < lines.length; i++) {
                     const row = parseCSVLine(lines[i]);
                     if (row.length > 20) {
                         const rowFPS = parseFloat(row[17]);
-                        if (rowFPS > 0 && rowFPS !== detectedFPS) {
+                        if (rowFPS > 0) {
                             detectedFPS = rowFPS;
+                            fpsSource = 'csv';
                         }
                         dataRows.push({
                             recordIn: row[9] || '',
@@ -703,7 +771,7 @@
                                 tagVersion: tagOnMarker.metadata?.tagVersion || '',
                                 testRun: tagOnMarker.testRun,
                                 excludeFromStats: false,
-                                calculationExplained: tagOnMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency),
+                                calculationExplained: `${tagOnMarker.recordIn} → ${row.recordIn} @ ${detectedFPS}fps = ${msToSecondsFormat(latency)}`,
                                 isError: false,
                                 isMarked: false
                             });
@@ -752,7 +820,7 @@
                                 tagVersion: tagOffMarker.metadata?.tagVersion || '',
                                 testRun: tagOffMarker.testRun,
                                 excludeFromStats: false,
-                                calculationExplained: tagOffMarker.recordIn + ' → ' + row.recordIn + ' = ' + msToSecondsFormat(latency),
+                                calculationExplained: `${tagOffMarker.recordIn} → ${row.recordIn} @ ${detectedFPS}fps = ${msToSecondsFormat(latency)}`,
                                 isError: false,
                                 isMarked: false
                             });
@@ -788,7 +856,8 @@
                     axesFound: Array.from(axesFound),
                     rangesDetected,
                     filename,
-                    fps: detectedFPS
+                    fps: detectedFPS,
+                    fpsSource
                 };
             };
 
@@ -807,6 +876,8 @@
                                 note: ts.note || '',
                                 isMarked: Boolean(ts.isMarked)
                             })),
+                            fps: execution.fps != null ? execution.fps : '',
+                            fpsSource: execution.fpsSource || 'unknown',
                             requirements: mergeExecutionRequirements(execution.requirements),
                             requirementTemplateId: execution.requirementTemplateId || templateId,
                             hardware: normalizeHardwareList(execution.hardware || []),
@@ -935,6 +1006,8 @@
                 id: Date.now().toString() + '_exec',
                 name: 'Execution ' + ((testCase?.executions?.length || 0) + 1),
                 timestamps: [],
+                fps: '',
+                fpsSource: 'unknown',
                 requirements: mergeExecutionRequirements(templateConfig || getDefaultExecutionRequirements()),
                 requirementTemplateId: templateId,
                 notes: '',
@@ -1248,6 +1321,7 @@
                 execution.name = form.executionName || importDialog.fileName;
                 execution.timestamps = parsed.timestamps;
                 execution.fps = parsed.fps;
+                execution.fpsSource = parsed.fpsSource || 'default';
                 execution.notes = form.executionNotes;
                 const sanitizedHardware = (form.hardware || [])
                     .map(hw => ({ ...hw, id: hw.id || (Date.now().toString() + Math.random()) }))
@@ -1316,15 +1390,32 @@
 
             const updateExecutionField = (executionId, field, value) => {
                 setTestCases(testCases.map(tc => {
-                    if (tc.id === activeTestCase) {
-                        return {
-                            ...tc,
-                            executions: tc.executions.map(ex =>
-                                ex.id === executionId ? { ...ex, [field]: value } : ex
-                            )
-                        };
+                    if (tc.id !== activeTestCase) {
+                        return tc;
                     }
-                    return tc;
+
+                    return {
+                        ...tc,
+                        executions: tc.executions.map(ex => {
+                            if (ex.id !== executionId) {
+                                return ex;
+                            }
+
+                            if (field === 'fps') {
+                                const nextTimestamps = recalculateLatenciesForFps(ex.timestamps, value);
+                                const parsedFps = parseFloat(value);
+                                const fpsSource = parsedFps && isFinite(parsedFps) ? 'manual' : 'unknown';
+                                return {
+                                    ...ex,
+                                    fps: value,
+                                    fpsSource,
+                                    timestamps: nextTimestamps
+                                };
+                            }
+
+                            return { ...ex, [field]: value };
+                        })
+                    };
                 }));
             };
 
@@ -2483,7 +2574,14 @@
                                     <div className="bg-gray-50 rounded-lg p-4">
                                         <h3 className="font-semibold mb-2">File Insights</h3>
                                         <p className="text-sm"><span className="font-medium">File:</span> {importDialog.fileName}</p>
-                                        <p className="text-sm"><span className="font-medium">Detected FPS:</span> {parsed.fps}</p>
+                                        <p className="text-sm">
+                                            <span className="font-medium">Detected FPS:</span> {parsed.fps}
+                                            <span className="ml-2 text-xs text-gray-500">
+                                                {parsed.fpsSource === 'csv'
+                                                    ? '(from CSV metadata)'
+                                                    : '(defaulted — update if this clip used a different rate)'}
+                                            </span>
+                                        </p>
                                         <p className="text-sm"><span className="font-medium">Timestamps:</span> {parsed.timestamps.length}</p>
                                         <p className="text-sm"><span className="font-medium">Axes:</span> {parsed.axesFound.length > 0 ? parsed.axesFound.join(', ') : 'N/A'}</p>
                                         {parsed.metadata?.abNumber && (
@@ -2754,6 +2852,19 @@
                     axis,
                     stats: getStatistics(timestamps.filter(ts => ts.axis === axis), requirements)
                 }));
+                const fpsSourceNote = (() => {
+                    const source = currentExecution.fpsSource;
+                    if (source === 'csv') {
+                        return 'Detected from CSV metadata.';
+                    }
+                    if (source === 'manual') {
+                        return 'Manual override applied — the latencies reflect this FPS.';
+                    }
+                    if (source === 'default') {
+                        return 'No FPS metadata detected, using the default 30 fps conversion.';
+                    }
+                    return 'Provide an FPS value to re-run the timecode conversions if needed.';
+                })();
 
                 // Group errors by error number
                 const errorsByNumber = {};
@@ -3005,6 +3116,7 @@
                                         className="w-full border rounded px-3 py-2"
                                         placeholder="e.g., 240"
                                     />
+                                    <p className="text-xs text-gray-500 mt-1">{fpsSourceNote}</p>
                                 </div>
                             </div>
                             <div className="mt-3">
@@ -3297,9 +3409,6 @@
                                                     <div className="flex items-center flex-wrap gap-2">
                                                         <h3 className="font-semibold flex items-center gap-2 flex-wrap">
                                                             <span>{axisKey}</span>
-                                                            {!isUngrouped && distance !== null && (
-                                                                <span className="text-sm text-gray-600">({distance}mm)</span>
-                                                            )}
                                                             {!isUngrouped && distanceDetails?.source === 'manual' && (
                                                                 <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-800">Manual override</span>
                                                             )}
@@ -3597,6 +3706,38 @@
                     );
                 }
 
+                const axisComparisonEntries = comparisonExecutions.filter(entry => entry.axisKey);
+                const axisOptions = Array.from(new Set(axisComparisonEntries.map(entry => entry.axisKey)));
+                const activeAxis = selectedComparisonAxis && axisOptions.includes(selectedComparisonAxis)
+                    ? selectedComparisonAxis
+                    : (axisOptions[0] || null);
+                const axisMatrixRows = activeAxis
+                    ? axisComparisonEntries
+                        .filter(entry => entry.axisKey === activeAxis)
+                        .map(entry => {
+                            const tc = testCases.find(testCase => testCase.id === entry.testCaseId);
+                            const ex = tc?.executions.find(exec => exec.id === entry.executionId);
+                            if (!tc || !ex) return null;
+                            const executionRequirements = mergeExecutionRequirements(ex.requirements);
+                            const filteredTimestamps = ex.timestamps.filter(ts => {
+                                if (ts.isError || ts.latencyMs == null || ts.excludeFromStats) return false;
+                                if (!entry.axisKey) return true;
+                                return ts.axis && ts.direction && (ts.axis + ts.direction) === entry.axisKey;
+                            });
+                            const stats = getStatistics(filteredTimestamps, executionRequirements);
+                            const axisDistanceDetails = getDistanceDetailsForAxisKey(tc, entry.axisKey);
+                            return {
+                                key: entry.key,
+                                tc,
+                                ex,
+                                stats,
+                                requirements: executionRequirements,
+                                distanceDetails: axisDistanceDetails
+                            };
+                        })
+                        .filter(Boolean)
+                    : [];
+
                 return (
                     <div className="p-6 space-y-4">
                         <div className="flex items-center justify-between">
@@ -3608,6 +3749,84 @@
                                 Clear all
                             </button>
                         </div>
+                        {axisOptions.length > 0 && (
+                            <div className="bg-white rounded-lg shadow p-4">
+                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                                    <div>
+                                        <h3 className="font-semibold">Axis Comparison Matrix</h3>
+                                        <p className="text-sm text-gray-500">Line up identical axes across executions.</p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {axisOptions.map(axisKey => (
+                                            <button
+                                                key={axisKey}
+                                                onClick={() => setSelectedComparisonAxis(axisKey)}
+                                                className={`px-3 py-1 rounded-full border text-sm font-medium ${axisKey === activeAxis
+                                                    ? 'bg-blue-600 text-white border-blue-600'
+                                                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                                            >
+                                                Axis {axisKey}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {activeAxis && axisMatrixRows.length > 0 ? (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-gray-50">
+                                                <tr>
+                                                    <th className="px-3 py-2 text-left">Test Case · Execution</th>
+                                                    <th className="px-3 py-2 text-right">Min</th>
+                                                    <th className="px-3 py-2 text-right">Avg</th>
+                                                    <th className="px-3 py-2 text-right">Max</th>
+                                                    <th className="px-3 py-2 text-center">Count</th>
+                                                    <th className="px-3 py-2 text-center">Pass Rate</th>
+                                                    <th className="px-3 py-2 text-left">Distance</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {axisMatrixRows.map(row => (
+                                                    <tr key={row.key} className="border-t">
+                                                        <td className="px-3 py-2">
+                                                            <div className="font-semibold">{row.tc.name}</div>
+                                                            <div className="text-xs text-gray-500">{row.ex.name}</div>
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right font-mono">
+                                                            {row.stats.total === 0 ? '-' : formatMsToTime(row.stats.min)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right font-mono">
+                                                            {row.stats.total === 0 ? '-' : formatMsToTime(row.stats.avg)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-right font-mono">
+                                                            {row.stats.total === 0 ? '-' : formatMsToTime(row.stats.max)}
+                                                        </td>
+                                                        <td className="px-3 py-2 text-center">{row.stats.total}</td>
+                                                        <td className="px-3 py-2 text-center">
+                                                            {row.requirements.enabled && row.stats.total > 0
+                                                                ? `${row.stats.passRate.toFixed(1)}%`
+                                                                : '—'}
+                                                        </td>
+                                                        <td className="px-3 py-2">
+                                                            {row.distanceDetails?.value != null
+                                                                ? `${row.distanceDetails.value}mm`
+                                                                : 'N/A'}
+                                                            {row.distanceDetails?.source === 'manual' && (
+                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold">Manual</span>
+                                                            )}
+                                                            {row.distanceDetails?.source === 'template' && (
+                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-xs font-semibold">Template{row.distanceDetails.templateName ? ` · ${row.distanceDetails.templateName}` : ''}</span>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-gray-500">Add axis-specific cards to populate this matrix.</p>
+                                )}
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {comparisonExecutions.map(comp => {
                                 const tc = testCases.find(testCase => testCase.id === comp.testCaseId);
@@ -3648,15 +3867,21 @@
                                     ? `Template${axisDistanceDetails?.templateName ? ` · ${axisDistanceDetails.templateName}` : ''}`
                                     : 'Manual override';
 
+                                const isAxisCard = Boolean(comp.axisKey);
+                                const axisIsActive = isAxisCard && activeAxis && comp.axisKey === activeAxis;
+                                const cardBorderClass = isAxisCard
+                                    ? (axisIsActive ? 'border-2 border-blue-500' : 'border border-blue-100')
+                                    : 'border border-transparent';
+
                                 return (
-                                    <div key={comp.key} className="bg-white rounded-lg shadow p-4">
+                                    <div key={comp.key} className={`bg-white rounded-lg shadow p-4 ${cardBorderClass}`}>
                                         <div className="flex items-center justify-between mb-3">
                                             <div>
                                                 <h3 className="font-semibold">{tc.name}</h3>
                                                 <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
                                                     <span>{heading}</span>
                                                     {comp.axisKey && (
-                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">
+                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${axisIsActive ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'}`}>
                                                             Axis {comp.axisKey}
                                                         </span>
                                                     )}

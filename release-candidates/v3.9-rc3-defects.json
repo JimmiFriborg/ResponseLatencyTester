@@ -1,6 +1,6 @@
 {
   "release": "v3.9 RC3",
-  "lastUpdated": "2024-05-12T12:00:00.000Z",
+  "lastUpdated": "2024-05-14T12:00:00.000Z",
   "defects": [
     {
       "id": "DEF-001",
@@ -46,6 +46,24 @@
       "status": "Resolved",
       "owner": "QA",
       "lastUpdated": "2024-05-12T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-006",
+      "title": "Default FPS conversions hide long latencies",
+      "description": "When a CSV omits explicit FPS metadata the parser locks to 30 fps, producing 1.500s deltas for clips that actually ran closer to 1.8s. Users need both visibility into the detection source and a way to recalculate latencies when the rate is wrong.",
+      "severity": "Medium",
+      "status": "Resolved",
+      "owner": "QA",
+      "lastUpdated": "2024-05-14T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-007",
+      "title": "Axis comparison lacks a dedicated matrix",
+      "description": "The comparison dashboard lists per-execution cards only, so there is no dedicated axis view or visual highlight showing which direction is being evaluated. Reviewers cannot quickly align the same axis across runs.",
+      "severity": "Low",
+      "status": "Resolved",
+      "owner": "Systems",
+      "lastUpdated": "2024-05-14T12:00:00.000Z"
     }
   ]
 }
