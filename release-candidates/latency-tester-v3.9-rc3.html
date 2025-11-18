@@ -172,6 +172,12 @@
             });
             return flattened;
         };
+        const executionHasComparableSamples = (execution) => {
+            if (!execution?.timestamps) return false;
+            return execution.timestamps.some(ts =>
+                !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
+            );
+        };
         const hasDistanceValue = (value) => value !== undefined && value !== null && value !== '';
         const DEFECT_STATUSES = ['Open', 'Investigating', 'In Progress', 'Blocked', 'Resolved'];
         const DEFECT_SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
@@ -748,7 +754,8 @@
                     'bar-chart': '📊', 'settings': '⚙️', 'file-text': '📄',
                     'eye': '👁️', 'eye-off': '👁️‍🗨️', 'git-compare': '🔄',
                     'hard-drive': '💽', 'star': '⭐', 'star-off': '☆',
-                    'alert-triangle': '⚠️', 'copy': '📋', 'pin': '📌', 'link': '🔗'
+                    'alert-triangle': '⚠️', 'copy': '📋', 'pin': '📌', 'link': '🔗',
+                    'check-circle': '🟢', 'x-circle': '🔴', 'help-circle': '❔', 'minus-circle': '⚪'
                 };
                 return <span>{icons[name] || '•'}</span>;
             };
@@ -2276,9 +2283,7 @@
             // Get current test case and execution
             const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
             const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
-            const currentExecutionHasComparableSamples = currentExecution?.timestamps?.some(ts =>
-                !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
-            );
+            const currentExecutionHasComparableSamples = executionHasComparableSamples(currentExecution);
 
             // Requirements Settings View
             const renderRequirementsView = () => (
@@ -2807,7 +2812,7 @@
                                                                                             )}
                                                                                             {axisDistanceDetails?.source === 'template' && (
                                                                                                 <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800">
-                                                                                                    Template{axisDistanceDetails.templateName ? ` · ${axisDistanceDetails.templateName}` : ''}
+                                                                                                    {axisDistanceDetails.templateName || 'Template'}
                                                                                                 </span>
                                                                                             )}
                                                                                         </span>
@@ -3610,7 +3615,15 @@
                                         className="text-xl font-bold border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none px-2 py-1"
                                     />
                                 </div>
-                                <div className="flex space-x-2">
+                                <div className="flex flex-wrap gap-2 justify-end">
+                                    <button
+                                        onClick={() => openAxisSelectionPanel(currentTestCase.id, currentExecution.id)}
+                                        disabled={!currentExecutionHasComparableSamples}
+                                        title={currentExecutionHasComparableSamples ? 'Queue this execution for comparison' : 'No valid latency measurements available for comparison'}
+                                        className={`px-3 py-1 rounded ${currentExecutionHasComparableSamples ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-200 text-blue-800 cursor-not-allowed'}`}
+                                    >
+                                        <Icon name="git-compare" /> Add to Comparison
+                                    </button>
                                     <button
                                         onClick={() => {
                                             setSelectedForReport(prev =>
@@ -4197,7 +4210,7 @@
                                                             )}
                                                             {!isUngrouped && distanceDetails?.source === 'template' && (
                                                                 <span className="inline-flex items-center px-2 py-0.5 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800">
-                                                                    Template{distanceDetails.templateName ? ` · ${distanceDetails.templateName}` : ''}
+                                                                    {distanceDetails.templateName || 'Template'}
                                                                 </span>
                                                             )}
                                                         </h3>
@@ -4405,7 +4418,7 @@
                             if (!hw) return;
                             const hasDetails = hw.type || hw.name || hw.serialNumber || hw.version || hw.revision;
                             if (!hasDetails) return;
-                            usages.push({ hw, tc, ex });
+                            usages.push({ hw, tc, ex, hasComparableSamples: executionHasComparableSamples(ex) });
                         });
                     });
                 });
@@ -4441,7 +4454,8 @@
                         testCaseId: entry.tc.id,
                         testCaseName: entry.tc.name,
                         executionId: entry.ex.id,
-                        executionName: entry.ex.name
+                        executionName: entry.ex.name,
+                        hasComparableSamples: entry.hasComparableSamples
                     });
                     return acc;
                 }, {});
@@ -4498,9 +4512,20 @@
                                                 <td className="px-4 py-3">
                                                     <div className="flex flex-wrap gap-2">
                                                         {device.usages.map((usage, index) => (
-                                                            <span key={usage.executionId + index} className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full text-xs">
-                                                                {usage.testCaseName} · {usage.executionName}
-                                                            </span>
+                                                            <div
+                                                                key={usage.executionId + index}
+                                                                className="flex items-center gap-2 px-3 py-1 bg-blue-50 text-blue-900 rounded-full text-xs border border-blue-100"
+                                                            >
+                                                                <span>{usage.testCaseName} · {usage.executionName}</span>
+                                                                <button
+                                                                    onClick={() => openAxisSelectionPanel(usage.testCaseId, usage.executionId)}
+                                                                    disabled={!usage.hasComparableSamples}
+                                                                    title={usage.hasComparableSamples ? 'Add this execution to comparison' : 'No comparable latency measurements available'}
+                                                                    className={`inline-flex items-center gap-1 text-[11px] font-semibold ${usage.hasComparableSamples ? 'text-blue-700 hover:text-blue-900' : 'text-gray-400 cursor-not-allowed'}`}
+                                                                >
+                                                                    <Icon name="git-compare" /> Compare
+                                                                </button>
+                                                            </div>
                                                         ))}
                                                     </div>
                                                 </td>
@@ -4629,7 +4654,7 @@
                                                                 <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold">Manual</span>
                                                             )}
                                                             {row.distanceDetails?.source === 'template' && (
-                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-xs font-semibold">Template{row.distanceDetails.templateName ? ` · ${row.distanceDetails.templateName}` : ''}</span>
+                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-xs font-semibold">{row.distanceDetails.templateName || 'Template'}</span>
                                                             )}
                                                         </td>
                                                     </tr>
@@ -4690,22 +4715,71 @@
                                     const stats = getStatistics(filteredTimestamps, executionRequirements);
                                     const axisOptionsForCard = getComparableAxisOptions(ex);
                                     const selectedAxes = comp.axisKeys || [];
+                                    const uniqueSelectedAxes = Array.from(new Set(selectedAxes));
                                     const activeAxis = selectedComparisonAxis;
+                                    const templateName = getRequirementTemplateById(ex.requirementTemplateId)?.name
+                                        || getRequirementTemplateById(tc.requirementTemplateId)?.name
+                                        || '';
+                                    const passFailStatus = (() => {
+                                        if (!executionRequirements.enabled || stats.total === 0) return 'not-applicable';
+                                        return stats.failed > 0 ? 'fail' : 'pass';
+                                    })();
+                                    const passFailMeta = {
+                                        pass: { label: 'Pass', icon: 'check-circle', classes: 'bg-emerald-100 text-emerald-800' },
+                                        fail: { label: 'Fail', icon: 'x-circle', classes: 'bg-rose-100 text-rose-700' },
+                                        'not-applicable': { label: 'No requirements', icon: 'minus-circle', classes: 'bg-gray-100 text-gray-600' }
+                                    }[passFailStatus];
 
                                     return (
                                         <div key={comp.key} className="bg-white rounded-lg shadow p-4 border border-blue-50">
-                                            <div className="flex items-center justify-between mb-3">
-                                                <div>
-                                                    <h3 className="font-semibold">{tc.name}</h3>
-                                                    <p className="text-sm text-gray-600">{ex.name}</p>
+                                            <div className="flex items-center justify-between mb-3 gap-3">
+                                                <div className="min-w-0">
+                                                    <h3 className="font-semibold truncate">{tc.name}</h3>
+                                                    <p className="text-sm text-gray-600 truncate">{ex.name}</p>
+                                                    {templateName && (
+                                                        <div className="mt-1">
+                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold">
+                                                                {templateName}
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                     <p className="text-xs text-gray-500">Axis selections persist across sessions.</p>
                                                 </div>
-                                                <button
-                                                    onClick={() => removeFromComparison(comp.key)}
-                                                    className="text-red-600 hover:text-red-800"
-                                                >
-                                                    <Icon name="x" />
-                                                </button>
+                                                <div className="flex flex-col items-end gap-1 text-xs">
+                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${passFailMeta.classes}`}>
+                                                        <Icon name={passFailMeta.icon} /> {passFailMeta.label}
+                                                    </span>
+                                                    <button
+                                                        onClick={() => removeFromComparison(comp.key)}
+                                                        className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700"
+                                                    >
+                                                        <Icon name="trash-2" /> Remove
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="mt-3">
+                                                <p className="text-xs uppercase text-gray-500 tracking-wide">Tracked axes</p>
+                                                {uniqueSelectedAxes.length > 0 ? (
+                                                    <div className="mt-1 flex flex-wrap gap-2">
+                                                        {uniqueSelectedAxes.map(axisKey => {
+                                                            const badgeDistance = getDistanceDetailsForAxisKey(tc, axisKey);
+                                                            const distanceLabel = badgeDistance?.value != null ? `${badgeDistance.value}mm` : 'Distance n/a';
+                                                            const tone = badgeDistance?.source === 'manual'
+                                                                ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                                                                : badgeDistance?.source === 'template'
+                                                                    ? 'bg-indigo-50 text-indigo-900 border-indigo-200'
+                                                                    : 'bg-gray-50 text-gray-700 border-gray-200';
+                                                            return (
+                                                                <span key={axisKey} className={`inline-flex flex-col px-3 py-1 rounded-lg border text-xs ${tone}`}>
+                                                                    <span className="font-semibold text-sm">{axisKey}</span>
+                                                                    <span className="text-[11px]">{distanceLabel}</span>
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <p className="text-xs text-amber-700 mt-1">No axes selected yet — toggle filters below to populate this card.</p>
+                                                )}
                                             </div>
                                             {stats.total === 0 ? (
                                                 <p className="text-sm text-gray-500">No valid measurements available for this execution.</p>
@@ -4771,7 +4845,7 @@
                                                     </div>
                                                 )}
                                                 <p className="text-xs text-gray-500">Checked axes feed the comparison matrix. Uncheck to hide them without leaving this page.</p>
-                                                {selectedAxes.length === 0 && (
+                                                {uniqueSelectedAxes.length === 0 && (
                                                     <p className="text-xs text-amber-700">No axes selected yet — toggle one above to start a comparison.</p>
                                                 )}
                                             </div>
@@ -4819,16 +4893,6 @@
                                     >
                                         <Icon name="link" /> Compare Sessions
                                     </button>
-                                    {currentTestCase && currentExecution && (
-                                        <button
-                                            onClick={() => openAxisSelectionPanel(activeTestCase, activeExecution)}
-                                            disabled={!currentExecutionHasComparableSamples}
-                                            title={currentExecutionHasComparableSamples ? 'Add the active execution to the comparison dashboard' : 'No valid latency measurements available for comparison'}
-                                            className={`px-4 py-2 rounded ${currentExecutionHasComparableSamples ? 'bg-blue-700 hover:bg-blue-800' : 'bg-blue-300 cursor-not-allowed'}`}
-                                        >
-                                            <Icon name="git-compare" /> Add to Comparison
-                                        </button>
-                                    )}
                                 </div>
                             </div>
                         </div>
