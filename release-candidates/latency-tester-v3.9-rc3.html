@@ -28,7 +28,7 @@
     <div id="root"></div>
 
     <script type="text/babel" data-presets="env,react">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
         const RELEASE_VERSION = 'v3.9 RC3';
         const DEFECT_REGISTER_FILE = 'v3.9-rc3-defects.json';
@@ -37,6 +37,11 @@
         const AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'];
         const AXES = ['X', 'Y', 'Z'];
         const DISTANCE_AXES = ['X', 'Y', 'Z'];
+        const DATASET_SOURCE_LABELS = {
+            'manual-entry': 'Manual Session',
+            'manual-import': 'Manual Import',
+            'automation-report': 'Automation Report'
+        };
         const hasDistanceValue = (value) => value !== undefined && value !== null && value !== '';
         const DEFECT_STATUSES = ['Open', 'Investigating', 'In Progress', 'Blocked', 'Resolved'];
         const DEFECT_SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
@@ -187,8 +192,41 @@
             const [defectSeverityFilter, setDefectSeverityFilter] = useState('all');
             const [importHardwareLibrarySelection, setImportHardwareLibrarySelection] = useState('');
             const [executionHardwareLibrarySelection, setExecutionHardwareLibrarySelection] = useState('');
+            const [sessionDiffConfig, setSessionDiffConfig] = useState({ baseline: null, candidate: null });
+            const [compareSessionsDialog, setCompareSessionsDialog] = useState(null);
+            const [diffAnnotations, setDiffAnnotations] = useState({});
+            const [copyDiffStatus, setCopyDiffStatus] = useState('');
 
             const importRef = useRef(null);
+            const copyStatusTimeoutRef = useRef(null);
+
+            const executionExists = (ref) => {
+                if (!ref) return false;
+                const tc = testCases.find(testCase => testCase.id === ref.testCaseId);
+                if (!tc) return false;
+                return (tc.executions || []).some(ex => ex.id === ref.executionId);
+            };
+
+            const describeDatasetSource = (source) => DATASET_SOURCE_LABELS[source] || DATASET_SOURCE_LABELS['manual-entry'];
+
+            useEffect(() => {
+                return () => {
+                    if (copyStatusTimeoutRef.current) {
+                        clearTimeout(copyStatusTimeoutRef.current);
+                    }
+                };
+            }, []);
+
+            useEffect(() => {
+                setSessionDiffConfig(prev => {
+                    const nextBaseline = prev.baseline && executionExists(prev.baseline) ? prev.baseline : null;
+                    const nextCandidate = prev.candidate && executionExists(prev.candidate) ? prev.candidate : null;
+                    if (nextBaseline === prev.baseline && nextCandidate === prev.candidate) {
+                        return prev;
+                    }
+                    return { baseline: nextBaseline, candidate: nextCandidate };
+                });
+            }, [testCases]);
 
             useEffect(() => {
                 fetch(DEFECT_REGISTER_FILE)
@@ -212,6 +250,135 @@
                     return firstAxis || null;
                 });
             }, [comparisonExecutions]);
+
+            const encodeExecutionKey = (testCaseId, executionId) => `${testCaseId}::${executionId}`;
+            const decodeExecutionKey = (value) => {
+                if (!value) return null;
+                const [testCaseId, executionId] = value.split('::');
+                if (!testCaseId || !executionId) return null;
+                return { testCaseId, executionId };
+            };
+
+            const executionOptions = useMemo(() => {
+                const entries = [];
+                testCases.forEach(tc => {
+                    (tc.executions || []).forEach(ex => {
+                        entries.push({
+                            value: encodeExecutionKey(tc.id, ex.id),
+                            testCaseId: tc.id,
+                            executionId: ex.id,
+                            label: `${tc.name} · ${ex.name}`,
+                            datasetSource: ex.datasetSource || 'manual-entry',
+                            timestampCount: (ex.timestamps || []).length,
+                            fps: ex.fps,
+                            hardwareCount: (ex.hardware || []).length
+                        });
+                    });
+                });
+                return entries.sort((a, b) => a.label.localeCompare(b.label));
+            }, [testCases]);
+
+            const getExecutionSummaryForDiff = (ref) => {
+                if (!ref) return null;
+                const tc = testCases.find(testCase => testCase.id === ref.testCaseId);
+                if (!tc) return null;
+                const execution = (tc.executions || []).find(ex => ex.id === ref.executionId);
+                if (!execution) return null;
+                const requirements = mergeExecutionRequirements(execution.requirements);
+                const grouped = groupByAxis(execution.timestamps || []);
+                const axisStats = {};
+                Object.entries(grouped).forEach(([axisKey, axisTimestamps]) => {
+                    if (axisKey === UNGROUPED_BUCKET) return;
+                    const axis = axisKey[0];
+                    const direction = axisKey[1];
+                    axisStats[axisKey] = getAxisStatistics(axisTimestamps, axis, direction, requirements);
+                });
+                const parsedFps = Number.parseFloat(execution.fps);
+                const fpsValue = Number.isFinite(parsedFps) ? parsedFps : null;
+                const hardwareSummary = (execution.hardware || [])
+                    .map(hw => describeHardwarePreset(hw))
+                    .join('; ') || 'No hardware linked';
+                return {
+                    testCaseId: tc.id,
+                    executionId: execution.id,
+                    testCaseName: tc.name,
+                    executionName: execution.name,
+                    fps: fpsValue,
+                    datasetSource: execution.datasetSource || 'manual-entry',
+                    hardwareSummary,
+                    axisStats
+                };
+            };
+
+            const sessionDiffData = useMemo(() => {
+                if (!sessionDiffConfig.baseline || !sessionDiffConfig.candidate) return null;
+                const baseline = getExecutionSummaryForDiff(sessionDiffConfig.baseline);
+                const candidate = getExecutionSummaryForDiff(sessionDiffConfig.candidate);
+                if (!baseline || !candidate) return null;
+                const fpsDelta = computeFpsDelta(baseline.fps, candidate.fps);
+                const axisKeys = Array.from(new Set([
+                    ...Object.keys(baseline.axisStats || {}),
+                    ...Object.keys(candidate.axisStats || {})
+                ])).sort((a, b) => a.localeCompare(b));
+                const axes = axisKeys.map(axisKey => {
+                    const baselineStats = baseline.axisStats[axisKey] || null;
+                    const candidateStats = candidate.axisStats[axisKey] || null;
+                    const safeMetric = (stats, metric) => {
+                        if (!stats || stats.total === 0) return null;
+                        return stats[metric];
+                    };
+                    const delta = {
+                        min: safeMetric(candidateStats, 'min') != null && safeMetric(baselineStats, 'min') != null
+                            ? safeMetric(candidateStats, 'min') - safeMetric(baselineStats, 'min')
+                            : null,
+                        avg: safeMetric(candidateStats, 'avg') != null && safeMetric(baselineStats, 'avg') != null
+                            ? safeMetric(candidateStats, 'avg') - safeMetric(baselineStats, 'avg')
+                            : null,
+                        max: safeMetric(candidateStats, 'max') != null && safeMetric(baselineStats, 'max') != null
+                            ? safeMetric(candidateStats, 'max') - safeMetric(baselineStats, 'max')
+                            : null
+                    };
+                    const hardwareDiff = baseline.hardwareSummary === candidate.hardwareSummary ? null : {
+                        baseline: baseline.hardwareSummary,
+                        candidate: candidate.hardwareSummary
+                    };
+                    return {
+                        axisKey,
+                        baselineStats,
+                        candidateStats,
+                        delta,
+                        fpsDelta,
+                        hardwareDiff
+                    };
+                });
+                const axisMap = axes.reduce((acc, row) => {
+                    acc[row.axisKey] = row;
+                    return acc;
+                }, {});
+                const axisAggregate = AXES.reduce((acc, axis) => {
+                    const plusKey = axis + '+';
+                    const minusKey = axis + '-';
+                    if (axisMap[plusKey] || axisMap[minusKey]) {
+                        acc[axis] = {
+                            plus: axisMap[plusKey] || null,
+                            minus: axisMap[minusKey] || null
+                        };
+                    }
+                    return acc;
+                }, {});
+                return {
+                    baseline,
+                    candidate,
+                    axes,
+                    axisMap,
+                    axisAggregate,
+                    fpsDelta,
+                    hardwareDiffers: baseline.hardwareSummary !== candidate.hardwareSummary
+                };
+            }, [sessionDiffConfig, testCases]);
+
+            const sessionDiffAxisMap = sessionDiffData?.axisMap || {};
+            const sessionDiffAxisAggregate = sessionDiffData?.axisAggregate || {};
 
             const getRequirementTemplateById = (templateId) =>
                 requirementTemplates.find(template => template.id === templateId);
@@ -473,7 +640,7 @@
                     'bar-chart': '📊', 'settings': '⚙️', 'file-text': '📄',
                     'eye': '👁️', 'eye-off': '👁️‍🗨️', 'git-compare': '🔄',
                     'hard-drive': '💽', 'star': '⭐', 'star-off': '☆',
-                    'alert-triangle': '⚠️'
+                    'alert-triangle': '⚠️', 'copy': '📋', 'pin': '📌', 'link': '🔗'
                 };
                 return <span>{icons[name] || '•'}</span>;
             };
@@ -523,6 +690,35 @@
 
         const msToSecondsFormat = (ms) => (ms / 1000).toFixed(3);
         const formatMsToTime = (ms) => (!ms && ms !== 0) ? '-' : (ms / 1000).toFixed(3) + 's';
+        const formatDeltaMs = (value, suffix = 'ms') => {
+            if (value === null || value === undefined || Number.isNaN(value)) {
+                return '—';
+            }
+            const formatted = Number(value).toFixed(2);
+            const numeric = Number(value);
+            const prefix = numeric > 0 ? '+' : '';
+            return `${prefix}${formatted}${suffix}`;
+        };
+        const getDeltaBadgeClasses = (value) => {
+            if (value === null || value === undefined || Number.isNaN(value)) {
+                return 'bg-gray-100 text-gray-600';
+            }
+            if (value < 0) {
+                return 'bg-emerald-100 text-emerald-800';
+            }
+            if (value > 0) {
+                return 'bg-rose-100 text-rose-700';
+            }
+            return 'bg-gray-200 text-gray-700';
+        };
+        const computeFpsDelta = (baselineFps, candidateFps) => {
+            const base = Number.parseFloat(baselineFps);
+            const cand = Number.parseFloat(candidateFps);
+            if (!Number.isFinite(base) || !Number.isFinite(cand)) {
+                return null;
+            }
+            return cand - base;
+        };
 
         const recalculateLatenciesForFps = (timestamps = [], fpsValue) => {
             const numericFps = parseFloat(fpsValue);
@@ -861,7 +1057,7 @@
                 };
             };
 
-            const hydrateTestCases = (cases = [], templates = requirementTemplates) => {
+            const hydrateTestCases = (cases = [], templates = requirementTemplates, defaultDatasetSource = 'manual-entry') => {
                 return cases.map(tc => {
                     const templateId = tc.requirementTemplateId || templates[0]?.id || null;
                     return {
@@ -878,6 +1074,7 @@
                             })),
                             fps: execution.fps != null ? execution.fps : '',
                             fpsSource: execution.fpsSource || 'unknown',
+                            datasetSource: execution.datasetSource || defaultDatasetSource,
                             requirements: mergeExecutionRequirements(execution.requirements),
                             requirementTemplateId: execution.requirementTemplateId || templateId,
                             hardware: normalizeHardwareList(execution.hardware || []),
@@ -1008,6 +1205,7 @@
                 timestamps: [],
                 fps: '',
                 fpsSource: 'unknown',
+                datasetSource: 'manual-entry',
                 requirements: mergeExecutionRequirements(templateConfig || getDefaultExecutionRequirements()),
                 requirementTemplateId: templateId,
                 notes: '',
@@ -1120,10 +1318,23 @@
                                 setRequirementTemplates(importedTemplates);
                             }
                             if (data.testCases) {
-                                setTestCases(hydrateTestCases(data.testCases, importedTemplates));
+                                setTestCases(hydrateTestCases(
+                                    data.testCases,
+                                    importedTemplates,
+                                    'manual-import'
+                                ));
                             }
                             if (Array.isArray(data.defects)) {
                                 setDefects(data.defects.map(defect => createDefectRecord(defect)));
+                            }
+                            if (data.sessionDiff?.selection) {
+                                setSessionDiffConfig({
+                                    baseline: data.sessionDiff.selection.baseline || null,
+                                    candidate: data.sessionDiff.selection.candidate || null
+                                });
+                            }
+                            if (data.sessionDiff?.annotations) {
+                                setDiffAnnotations(data.sessionDiff.annotations);
                             }
                             alert('Data imported successfully!');
                         } catch (err) {
@@ -1142,6 +1353,10 @@
                     testCases,
                     requirementTemplates,
                     defects,
+                    sessionDiff: {
+                        selection: sessionDiffConfig,
+                        annotations: diffAnnotations
+                    },
                     exportDate: new Date().toISOString()
                 };
 
@@ -1152,6 +1367,135 @@
                 a.download = 'latency-test-data-' + new Date().toISOString().split('T')[0] + '.json';
                 a.click();
                 URL.revokeObjectURL(url);
+            };
+
+            const openCompareSessionsDialog = () => {
+                if (executionOptions.length < 2) {
+                    alert('Import or create at least two executions before comparing sessions.');
+                    return;
+                }
+                setCompareSessionsDialog({
+                    baselineKey: sessionDiffConfig.baseline
+                        ? encodeExecutionKey(sessionDiffConfig.baseline.testCaseId, sessionDiffConfig.baseline.executionId)
+                        : '',
+                    candidateKey: sessionDiffConfig.candidate
+                        ? encodeExecutionKey(sessionDiffConfig.candidate.testCaseId, sessionDiffConfig.candidate.executionId)
+                        : ''
+                });
+            };
+
+            const closeCompareSessionsDialog = () => setCompareSessionsDialog(null);
+
+            const updateCompareDialogField = (field, value) => {
+                setCompareSessionsDialog(prev => prev ? ({
+                    ...prev,
+                    [field]: value
+                }) : prev);
+            };
+
+            const applyCompareSessionsSelection = () => {
+                if (!compareSessionsDialog) return;
+                if (!compareSessionsDialog.baselineKey || !compareSessionsDialog.candidateKey) {
+                    alert('Select both baseline and candidate sessions.');
+                    return;
+                }
+                if (compareSessionsDialog.baselineKey === compareSessionsDialog.candidateKey) {
+                    alert('Baseline and candidate must be different sessions.');
+                    return;
+                }
+                const baselineRef = decodeExecutionKey(compareSessionsDialog.baselineKey);
+                const candidateRef = decodeExecutionKey(compareSessionsDialog.candidateKey);
+                setSessionDiffConfig({ baseline: baselineRef, candidate: candidateRef });
+                setCompareSessionsDialog(null);
+            };
+
+            const handleDiffAnnotation = (axisKey) => {
+                const existing = diffAnnotations[axisKey] || '';
+                const next = window.prompt(`Add annotation for ${axisKey}`, existing);
+                if (next === null) return;
+                setDiffAnnotations(prev => {
+                    const nextState = { ...prev };
+                    if (!next.trim()) {
+                        delete nextState[axisKey];
+                    } else {
+                        nextState[axisKey] = next.trim();
+                    }
+                    return nextState;
+                });
+            };
+
+            const setCopyStatusMessage = (message) => {
+                setCopyDiffStatus(message);
+                if (copyStatusTimeoutRef.current) {
+                    clearTimeout(copyStatusTimeoutRef.current);
+                }
+                copyStatusTimeoutRef.current = setTimeout(() => setCopyDiffStatus(''), 4000);
+            };
+
+            const fallbackCopyText = (text) => {
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    setCopyStatusMessage('Diff summary copied to clipboard.');
+                } catch (err) {
+                    alert('Unable to copy diff summary: ' + err.message);
+                }
+                document.body.removeChild(textarea);
+            };
+
+            const copyDiffSummaryToClipboard = () => {
+                if (!sessionDiffData) return;
+                const summarizeStats = (stats) => {
+                    if (!stats || stats.total === 0) return null;
+                    return {
+                        min: stats.min,
+                        avg: stats.avg,
+                        max: stats.max,
+                        total: stats.total
+                    };
+                };
+                const payload = {
+                    release: RELEASE_VERSION,
+                    generatedAt: new Date().toISOString(),
+                    baseline: {
+                        id: sessionDiffData.baseline.executionId,
+                        testCaseId: sessionDiffData.baseline.testCaseId,
+                        label: `${sessionDiffData.baseline.testCaseName} · ${sessionDiffData.baseline.executionName}`,
+                        fps: sessionDiffData.baseline.fps,
+                        source: describeDatasetSource(sessionDiffData.baseline.datasetSource),
+                        hardware: sessionDiffData.baseline.hardwareSummary
+                    },
+                    candidate: {
+                        id: sessionDiffData.candidate.executionId,
+                        testCaseId: sessionDiffData.candidate.testCaseId,
+                        label: `${sessionDiffData.candidate.testCaseName} · ${sessionDiffData.candidate.executionName}`,
+                        fps: sessionDiffData.candidate.fps,
+                        source: describeDatasetSource(sessionDiffData.candidate.datasetSource),
+                        hardware: sessionDiffData.candidate.hardwareSummary
+                    },
+                    axes: sessionDiffData.axes.map(row => ({
+                        axisKey: row.axisKey,
+                        baseline: summarizeStats(row.baselineStats),
+                        candidate: summarizeStats(row.candidateStats),
+                        deltaMs: row.delta,
+                        fpsDelta: row.fpsDelta,
+                        hardwareDifference: row.hardwareDiff,
+                        annotation: diffAnnotations[row.axisKey] || ''
+                    }))
+                };
+                const text = JSON.stringify(payload, null, 2);
+                if (navigator?.clipboard?.writeText) {
+                    navigator.clipboard.writeText(text)
+                        .then(() => setCopyStatusMessage('Diff summary copied to clipboard.'))
+                        .catch(() => fallbackCopyText(text));
+                } else {
+                    fallbackCopyText(text);
+                }
             };
 
             const updateImportTarget = (value) => {
@@ -1322,6 +1666,7 @@
                 execution.timestamps = parsed.timestamps;
                 execution.fps = parsed.fps;
                 execution.fpsSource = parsed.fpsSource || 'default';
+                execution.datasetSource = 'automation-report';
                 execution.notes = form.executionNotes;
                 const sanitizedHardware = (form.hardware || [])
                     .map(hw => ({ ...hw, id: hw.id || (Date.now().toString() + Math.random()) }))
@@ -2819,6 +3164,88 @@
                 );
             };
 
+            const renderCompareSessionsModal = () => {
+                if (!compareSessionsDialog) return null;
+                const baselineOption = executionOptions.find(opt => opt.value === compareSessionsDialog.baselineKey);
+                const candidateOption = executionOptions.find(opt => opt.value === compareSessionsDialog.candidateKey);
+                const summaryCard = (option, heading) => (
+                    <div className="bg-gray-50 rounded-lg p-3 text-sm">
+                        <h4 className="font-semibold text-gray-700">{heading}</h4>
+                        {option ? (
+                            <>
+                                <p className="font-medium">{option.label}</p>
+                                <p className="text-xs text-gray-500">{describeDatasetSource(option.datasetSource)}</p>
+                                <p className="text-xs text-gray-500">FPS: {option.fps || '—'} · Samples: {option.timestampCount}</p>
+                                <p className="text-xs text-gray-500">Hardware entries: {option.hardwareCount}</p>
+                            </>
+                        ) : (
+                            <p className="text-xs text-gray-500">Select a session to see metadata.</p>
+                        )}
+                    </div>
+                );
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                        <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+                            <div className="px-6 py-4 border-b flex items-center justify-between">
+                                <div>
+                                    <h2 className="text-xl font-semibold">Compare Sessions</h2>
+                                    <p className="text-sm text-gray-500">Choose a baseline dataset and a candidate dataset from your manual or automation imports.</p>
+                                </div>
+                                <button onClick={closeCompareSessionsDialog} className="text-gray-500 hover:text-gray-700">
+                                    <Icon name="x" />
+                                </button>
+                            </div>
+                            <div className="p-6 space-y-6">
+                                <div className="grid md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-sm font-medium">Baseline Dataset</label>
+                                        <select
+                                            className="w-full border rounded px-3 py-2 mt-1"
+                                            value={compareSessionsDialog.baselineKey}
+                                            onChange={(e) => updateCompareDialogField('baselineKey', e.target.value)}
+                                        >
+                                            <option value="">Select baseline</option>
+                                            {executionOptions.map(option => (
+                                                <option key={option.value} value={option.value}>{option.label} · {describeDatasetSource(option.datasetSource)}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-sm font-medium">Candidate Dataset</label>
+                                        <select
+                                            className="w-full border rounded px-3 py-2 mt-1"
+                                            value={compareSessionsDialog.candidateKey}
+                                            onChange={(e) => updateCompareDialogField('candidateKey', e.target.value)}
+                                        >
+                                            <option value="">Select candidate</option>
+                                            {executionOptions.map(option => (
+                                                <option key={option.value} value={option.value}>{option.label} · {describeDatasetSource(option.datasetSource)}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="grid md:grid-cols-2 gap-4">
+                                    {summaryCard(baselineOption, 'Baseline metadata')}
+                                    {summaryCard(candidateOption, 'Candidate metadata')}
+                                </div>
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-800">
+                                    Baseline should represent your known-good dataset. The candidate run is compared against it for min/avg/max latency, FPS, and hardware differences.
+                                </div>
+                            </div>
+                            <div className="px-6 py-4 border-t bg-gray-50 flex justify-end gap-3">
+                                <button onClick={closeCompareSessionsDialog} className="px-4 py-2 border rounded">Cancel</button>
+                                <button
+                                    onClick={applyCompareSessionsSelection}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                                >
+                                    Apply Selection
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
             // Execution View
             const renderExecutionView = () => {
                 if (!currentTestCase || !currentExecution) {
@@ -3078,6 +3505,36 @@
                                                             className="w-full px-2 py-1 border rounded text-sm"
                                                         />
                                                     </div>
+                                                    {sessionDiffAxisAggregate[axis] && (
+                                                        <div className="text-xs text-gray-600 border-t pt-2 space-y-1">
+                                                            {['plus', 'minus'].map(directionKey => {
+                                                                const row = sessionDiffAxisAggregate[axis][directionKey];
+                                                                if (!row) return null;
+                                                                const directionLabel = directionKey === 'plus' ? '+' : '-';
+                                                                return (
+                                                                    <div key={directionKey} className="flex flex-wrap items-center gap-2">
+                                                                        <span className="font-semibold">{axis}{directionLabel}</span>
+                                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full font-semibold ${getDeltaBadgeClasses(row.delta.avg)}`}>
+                                                                            Δ Avg: {formatDeltaMs(row.delta.avg)}
+                                                                        </span>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => handleDiffAnnotation(axis + directionLabel)}
+                                                                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700"
+                                                                        >
+                                                                            <Icon name="pin" /> {diffAnnotations[axis + directionLabel] ? 'Edit pin' : 'Pin note'}
+                                                                        </button>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                            {(diffAnnotations[axis + '+'] || diffAnnotations[axis + '-']) && (
+                                                                <div className="text-amber-700 italic flex items-start gap-1">
+                                                                    <Icon name="pin" />
+                                                                    <span>{[diffAnnotations[axis + '+'], diffAnnotations[axis + '-']].filter(Boolean).join(' / ')}</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
@@ -3401,6 +3858,8 @@
                                     const axisHasComparableSamples = axisTimestamps.some(ts =>
                                         !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
                                     );
+                                    const diffRow = sessionDiffAxisMap[axisKey];
+                                    const axisAnnotation = diffAnnotations[axisKey];
 
                                     return (
                                         <div key={axisKey} className="bg-white rounded-lg shadow overflow-hidden">
@@ -3446,6 +3905,45 @@
                                                             </button>
                                                         )}
                                                     </div>
+                                                    {diffRow && (
+                                                        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600 mt-2">
+                                                            {['min', 'avg', 'max'].map(metric => (
+                                                                <span
+                                                                    key={metric}
+                                                                    className={`inline-flex items-center px-2 py-0.5 rounded-full font-semibold ${getDeltaBadgeClasses(diffRow.delta[metric])}`}
+                                                                >
+                                                                    Δ {metric.toUpperCase()}: {formatDeltaMs(diffRow.delta[metric])}
+                                                                </span>
+                                                            ))}
+                                                            {diffRow.fpsDelta != null && (
+                                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full font-semibold ${getDeltaBadgeClasses(diffRow.fpsDelta)}`}>
+                                                                    Δ FPS: {formatDeltaMs(diffRow.fpsDelta, '')}
+                                                                </span>
+                                                            )}
+                                                            {diffRow.hardwareDiff && (
+                                                                <span
+                                                                    className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold"
+                                                                    title={`Baseline: ${diffRow.hardwareDiff.baseline}\nCandidate: ${diffRow.hardwareDiff.candidate}`}
+                                                                >
+                                                                    Hardware mismatch
+                                                                </span>
+                                                            )}
+                                                            {!isUngrouped && (
+                                                                <button
+                                                                    onClick={() => handleDiffAnnotation(axisKey)}
+                                                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700"
+                                                                >
+                                                                    <Icon name="pin" /> {axisAnnotation ? 'Edit pin' : 'Pin note'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                    {axisAnnotation && (
+                                                        <div className="text-xs text-amber-700 italic mt-1 flex items-start gap-1">
+                                                            <Icon name="pin" />
+                                                            <span>{axisAnnotation}</span>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                             <div className="overflow-x-auto">
@@ -3694,18 +4192,6 @@
 
             // Render comparison view
             const renderComparisonView = () => {
-                if (comparisonExecutions.length === 0) {
-                    return (
-                        <div className="flex items-center justify-center h-full p-12">
-                            <div className="text-center text-gray-500">
-                                <Icon name="git-compare" />
-                                <p className="mt-4">No executions added to comparison</p>
-                                <p className="text-sm mt-2">Use "Add to Comparison" in execution view</p>
-                            </div>
-                        </div>
-                    );
-                }
-
                 const axisComparisonEntries = comparisonExecutions.filter(entry => entry.axisKey);
                 const axisOptions = Array.from(new Set(axisComparisonEntries.map(entry => entry.axisKey)));
                 const activeAxis = selectedComparisonAxis && axisOptions.includes(selectedComparisonAxis)
@@ -3725,88 +4211,202 @@
                                 return ts.axis && ts.direction && (ts.axis + ts.direction) === entry.axisKey;
                             });
                             const stats = getStatistics(filteredTimestamps, executionRequirements);
-                            const axisDistanceDetails = getDistanceDetailsForAxisKey(tc, entry.axisKey);
+                            const distanceDetails = entry.axisKey ? getDistanceDetailsForAxisKey(tc, entry.axisKey) : null;
                             return {
                                 key: entry.key,
-                                tc,
-                                ex,
+                                testCaseName: tc.name,
+                                executionName: ex.name,
                                 stats,
-                                requirements: executionRequirements,
-                                distanceDetails: axisDistanceDetails
+                                distanceDetails
                             };
                         })
                         .filter(Boolean)
                     : [];
 
+                const hasComparisonCards = comparisonExecutions.length > 0;
+                const formatStat = (stats, metric) => {
+                    if (!stats || stats.total === 0) return '—';
+                    return `${stats[metric].toFixed(2)}ms`;
+                };
+
                 return (
-                    <div className="p-6 space-y-4">
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-2xl font-bold">Comparison View</h2>
-                            <button
-                                onClick={() => setComparisonExecutions([])}
-                                className="text-sm text-red-600 hover:text-red-800"
-                            >
-                                Clear all
-                            </button>
-                        </div>
-                        {axisOptions.length > 0 && (
-                            <div className="bg-white rounded-lg shadow p-4">
-                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-                                    <div>
-                                        <h3 className="font-semibold">Axis Comparison Matrix</h3>
-                                        <p className="text-sm text-gray-500">Line up identical axes across executions.</p>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2">
-                                        {axisOptions.map(axisKey => (
-                                            <button
-                                                key={axisKey}
-                                                onClick={() => setSelectedComparisonAxis(axisKey)}
-                                                className={`px-3 py-1 rounded-full border text-sm font-medium ${axisKey === activeAxis
-                                                    ? 'bg-blue-600 text-white border-blue-600'
-                                                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-                                            >
-                                                Axis {axisKey}
-                                            </button>
-                                        ))}
-                                    </div>
+                    <div className="p-6 space-y-6">
+                        <div className="bg-white rounded-lg shadow p-6 space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-4">
+                                <div>
+                                    <h2 className="text-xl font-semibold">Compare Sessions</h2>
+                                    <p className="text-sm text-gray-500">Pick baseline vs. candidate datasets (manual imports or automation reports) to calculate per-axis deltas.</p>
                                 </div>
-                                {activeAxis && axisMatrixRows.length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={openCompareSessionsDialog}
+                                        className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                                    >
+                                        <Icon name="link" /> Choose Sessions
+                                    </button>
+                                    <button
+                                        onClick={copyDiffSummaryToClipboard}
+                                        disabled={!sessionDiffData}
+                                        className={`px-3 py-1.5 text-sm rounded ${sessionDiffData ? 'bg-gray-100 text-gray-800 hover:bg-gray-200' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}`}
+                                    >
+                                        <Icon name="copy" /> Copy Diff Output
+                                    </button>
+                                </div>
+                            </div>
+                            {copyDiffStatus && (
+                                <p className="text-xs text-green-600">{copyDiffStatus}</p>
+                            )}
+                            {sessionDiffData ? (
+                                <>
+                                    <div className="grid md:grid-cols-2 gap-4">
+                                        <div className="border rounded-lg p-3 bg-gray-50">
+                                            <h4 className="text-xs font-semibold text-gray-500 uppercase">Baseline</h4>
+                                            <p className="font-medium">{sessionDiffData.baseline.testCaseName} · {sessionDiffData.baseline.executionName}</p>
+                                            <p className="text-xs text-gray-600">{describeDatasetSource(sessionDiffData.baseline.datasetSource)}</p>
+                                            <p className="text-xs text-gray-600">FPS: {sessionDiffData.baseline.fps ?? '—'}</p>
+                                            <p className="text-xs text-gray-600">Hardware: {sessionDiffData.baseline.hardwareSummary}</p>
+                                        </div>
+                                        <div className="border rounded-lg p-3 bg-gray-50">
+                                            <h4 className="text-xs font-semibold text-gray-500 uppercase">Candidate</h4>
+                                            <p className="font-medium">{sessionDiffData.candidate.testCaseName} · {sessionDiffData.candidate.executionName}</p>
+                                            <p className="text-xs text-gray-600">{describeDatasetSource(sessionDiffData.candidate.datasetSource)}</p>
+                                            <p className="text-xs text-gray-600">FPS: {sessionDiffData.candidate.fps ?? '—'}</p>
+                                            <p className="text-xs text-gray-600">Hardware: {sessionDiffData.candidate.hardwareSummary}</p>
+                                        </div>
+                                    </div>
+                                    {sessionDiffData.fpsDelta != null && (
+                                        <p className="text-xs text-gray-600">Overall FPS Δ: <span className={`px-2 py-0.5 rounded-full font-semibold ${getDeltaBadgeClasses(sessionDiffData.fpsDelta)}`}>{formatDeltaMs(sessionDiffData.fpsDelta, ' fps')}</span></p>
+                                    )}
+                                    {sessionDiffData.hardwareDiffers && (
+                                        <p className="text-xs text-amber-700">Hardware notes differ between the selected sessions.</p>
+                                    )}
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-sm">
                                             <thead className="bg-gray-50">
                                                 <tr>
-                                                    <th className="px-3 py-2 text-left">Test Case · Execution</th>
-                                                    <th className="px-3 py-2 text-right">Min</th>
-                                                    <th className="px-3 py-2 text-right">Avg</th>
-                                                    <th className="px-3 py-2 text-right">Max</th>
-                                                    <th className="px-3 py-2 text-center">Count</th>
-                                                    <th className="px-3 py-2 text-center">Pass Rate</th>
-                                                    <th className="px-3 py-2 text-left">Distance</th>
+                                                    <th className="px-4 py-2 text-left">Axis</th>
+                                                    <th className="px-4 py-2 text-right">Baseline</th>
+                                                    <th className="px-4 py-2 text-right">Candidate</th>
+                                                    <th className="px-4 py-2 text-right">Delta</th>
+                                                    <th className="px-4 py-2 text-left">Annotations</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {sessionDiffData.axes.length === 0 ? (
+                                                    <tr>
+                                                        <td colSpan="5" className="px-4 py-4 text-center text-gray-500">No axis data available for the selected sessions.</td>
+                                                    </tr>
+                                                ) : (
+                                                    sessionDiffData.axes.map(row => (
+                                                        <tr key={row.axisKey} className="border-b">
+                                                            <td className="px-4 py-2 font-semibold">{row.axisKey}</td>
+                                                            <td className="px-4 py-2 text-right">
+                                                                <div className="text-xs text-gray-600">
+                                                                    <div>Min: {formatStat(row.baselineStats, 'min')}</div>
+                                                                    <div>Avg: {formatStat(row.baselineStats, 'avg')}</div>
+                                                                    <div>Max: {formatStat(row.baselineStats, 'max')}</div>
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right">
+                                                                <div className="text-xs text-gray-600">
+                                                                    <div>Min: {formatStat(row.candidateStats, 'min')}</div>
+                                                                    <div>Avg: {formatStat(row.candidateStats, 'avg')}</div>
+                                                                    <div>Max: {formatStat(row.candidateStats, 'max')}</div>
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-2 text-right">
+                                                                <div className="flex flex-wrap justify-end gap-1">
+                                                                    {['min', 'avg', 'max'].map(metric => (
+                                                                        <span
+                                                                            key={metric}
+                                                                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${getDeltaBadgeClasses(row.delta[metric])}`}
+                                                                        >
+                                                                            Δ {metric.toUpperCase()} {formatDeltaMs(row.delta[metric])}
+                                                                        </span>
+                                                                    ))}
+                                                                    {row.fpsDelta != null && (
+                                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${getDeltaBadgeClasses(row.fpsDelta)}`}>
+                                                                            Δ FPS {formatDeltaMs(row.fpsDelta, '')}
+                                                                        </span>
+                                                                    )}
+                                                                    {row.hardwareDiff && (
+                                                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800" title={`Baseline: ${row.hardwareDiff.baseline}
+Candidate: ${row.hardwareDiff.candidate}`}>
+                                                                            Hardware mismatch
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                            <td className="px-4 py-2">
+                                                                <div className="text-xs space-y-1">
+                                                                    <button
+                                                                        onClick={() => handleDiffAnnotation(row.axisKey)}
+                                                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700"
+                                                                    >
+                                                                        <Icon name="pin" /> {diffAnnotations[row.axisKey] ? 'Edit note' : 'Add note'}
+                                                                    </button>
+                                                                    {diffAnnotations[row.axisKey] && (
+                                                                        <p className="text-amber-700 italic">{diffAnnotations[row.axisKey]}</p>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </>
+                            ) : (
+                                <p className="text-sm text-gray-500">Use “Choose Sessions” to calculate a diff between two runs.</p>
+                            )}
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow p-6">
+                            <div className="flex flex-wrap items-center justify-between gap-4">
+                                <div>
+                                    <h2 className="text-xl font-semibold">Axis Comparison Matrix</h2>
+                                    <p className="text-sm text-gray-500">Highlight per-axis statistics across executions.</p>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {axisOptions.map(axis => (
+                                        <button
+                                            key={axis}
+                                            onClick={() => setSelectedComparisonAxis(axis)}
+                                            className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                                activeAxis === axis ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700'
+                                            }`}
+                                        >
+                                            {axis}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="mt-4">
+                                {axisMatrixRows.length > 0 ? (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-gray-50">
+                                                <tr>
+                                                    <th className="px-4 py-2 text-left">Test Case</th>
+                                                    <th className="px-4 py-2 text-left">Execution</th>
+                                                    <th className="px-4 py-2 text-right">Min</th>
+                                                    <th className="px-4 py-2 text-right">Avg</th>
+                                                    <th className="px-4 py-2 text-right">Max</th>
+                                                    <th className="px-4 py-2 text-center">Samples</th>
+                                                    <th className="px-4 py-2 text-left">Distance</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {axisMatrixRows.map(row => (
-                                                    <tr key={row.key} className="border-t">
-                                                        <td className="px-3 py-2">
-                                                            <div className="font-semibold">{row.tc.name}</div>
-                                                            <div className="text-xs text-gray-500">{row.ex.name}</div>
-                                                        </td>
-                                                        <td className="px-3 py-2 text-right font-mono">
-                                                            {row.stats.total === 0 ? '-' : formatMsToTime(row.stats.min)}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-right font-mono">
-                                                            {row.stats.total === 0 ? '-' : formatMsToTime(row.stats.avg)}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-right font-mono">
-                                                            {row.stats.total === 0 ? '-' : formatMsToTime(row.stats.max)}
-                                                        </td>
-                                                        <td className="px-3 py-2 text-center">{row.stats.total}</td>
-                                                        <td className="px-3 py-2 text-center">
-                                                            {row.requirements.enabled && row.stats.total > 0
-                                                                ? `${row.stats.passRate.toFixed(1)}%`
-                                                                : '—'}
-                                                        </td>
-                                                        <td className="px-3 py-2">
+                                                    <tr key={row.key} className="border-b">
+                                                        <td className="px-4 py-2">{row.testCaseName}</td>
+                                                        <td className="px-4 py-2">{row.executionName}</td>
+                                                        <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.min)}</td>
+                                                        <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.avg)}</td>
+                                                        <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.max)}</td>
+                                                        <td className="px-4 py-2 text-center">{row.stats.total}</td>
+                                                        <td className="px-4 py-2">
                                                             {row.distanceDetails?.value != null
                                                                 ? `${row.distanceDetails.value}mm`
                                                                 : 'N/A'}
@@ -3826,11 +4426,30 @@
                                     <p className="text-sm text-gray-500">Add axis-specific cards to populate this matrix.</p>
                                 )}
                             </div>
-                        )}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {comparisonExecutions.map(comp => {
-                                const tc = testCases.find(testCase => testCase.id === comp.testCaseId);
-                                const ex = tc?.executions.find(exec => exec.id === comp.executionId);
+                        </div>
+
+                        <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-xl font-semibold">Execution Cards</h2>
+                                {hasComparisonCards && (
+                                    <button
+                                        onClick={() => setComparisonExecutions([])}
+                                        className="text-sm text-red-600 hover:text-red-800"
+                                    >
+                                        Clear all
+                                    </button>
+                                )}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {!hasComparisonCards && (
+                                    <div className="bg-white rounded-lg shadow p-4 text-gray-500 text-sm">
+                                        <p>No executions added to comparison yet.</p>
+                                        <p className="mt-1">Use "Add to Comparison" in the execution view to populate this dashboard.</p>
+                                    </div>
+                                )}
+                                {comparisonExecutions.map(comp => {
+                                    const tc = testCases.find(testCase => testCase.id === comp.testCaseId);
+                                    const ex = tc?.executions.find(exec => exec.id === comp.executionId);
 
                                 if (!tc || !ex) {
                                     return (
@@ -3930,7 +4549,8 @@
                                         )}
                                     </div>
                                 );
-                            })}
+                                })}
+                            </div>
                         </div>
                     </div>
                 );
@@ -3963,6 +4583,13 @@
                                         disabled={testCases.length === 0}
                                     >
                                         <Icon name="download" /> Export
+                                    </button>
+                                    <button
+                                        onClick={openCompareSessionsDialog}
+                                        disabled={executionOptions.length < 2}
+                                        className={`px-4 py-2 rounded ${executionOptions.length >= 2 ? 'bg-blue-700 hover:bg-blue-800' : 'bg-blue-300 cursor-not-allowed'}`}
+                                    >
+                                        <Icon name="link" /> Compare Sessions
                                     </button>
                                     {currentTestCase && currentExecution && (
                                         <button
@@ -4105,6 +4732,7 @@
                         </div>
                     </div>
 
+                    {renderCompareSessionsModal()}
                     {renderImportModal()}
 
                     <input
