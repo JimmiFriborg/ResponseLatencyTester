@@ -1,6 +1,6 @@
 {
   "release": "v3.9 RC3",
-  "lastUpdated": "2025-11-18T08:55:22.283Z",
+  "lastUpdated": "2025-11-18T09:03:30.946Z",
   "defects": [
     {
       "id": "DEF-001",
@@ -32,11 +32,11 @@
     {
       "id": "DEF-004",
       "title": "Comparison cards hide axis context",
-      "description": "When an execution is added to the comparison dashboard with a specific axis filter, the card never shows which axis/direction or distance bounds were applied. Reviewers cannot tell why runs fail without opening the original test case.",
+      "description": "When an execution is added to the comparison view with a specific axis filter, the card never shows which axis/direction or distance bounds were applied. Reviewers cannot tell why runs fail without opening the original test case.",
       "severity": "Low",
       "owner": "Systems",
       "status": "Resolved",
-      "lastUpdated": "2024-05-12T12:00:00.000Z"
+      "lastUpdated": "2025-11-18T08:58:35.748Z"
     },
     {
       "id": "DEF-005",
@@ -53,17 +53,17 @@
       "description": "In each individual Axis direction section (i.e. x+, y-) the \"Out of range\" requirement is appended to the title. But this is confusing as it indicates that is what we're testing against rather than the minimum requirement range. ",
       "severity": "High",
       "owner": "Codex",
-      "status": "Open",
-      "lastUpdated": "2025-11-17T11:51:47.052Z"
+      "status": "Resolved",
+      "lastUpdated": "2025-11-18T09:01:46.496Z"
     },
     {
       "id": "1763452540395_defect",
       "title": "Comparison selection",
-      "description": "Comparing different sessions in RC3 comparison page shows a white blank page. Select a baseline and a candidate dataset, click apply and a blank page appears.",
+      "description": "Compare Sessions in 3.9 RC3 shows a white blank page once clicking \"Apply Selection\". \nTo Reproduce: select a baseline and a candidate dataset, click apply and a blank page appears.",
       "severity": "Critical",
       "owner": "Codex",
       "status": "Open",
-      "lastUpdated": "2025-11-18T08:11:36.660Z"
+      "lastUpdated": "2025-11-18T09:00:34.223Z"
     },
     {
       "id": "1763452646021_defect",
@@ -114,10 +114,10 @@
       "id": "1763454065553_defect",
       "title": "Improve Add to comparison",
       "description": "When Clicking on \"Compare Axis\" user is taken directly to the Compare view without option for staying or selecting more axes, forcing the user to navigate back to the Test Execution and selecting the next Axis. When all 6 axis directions are to be compared for multiple test executions, this is wasting a lot of time. \n\nSolution idea: When adding a Test Execution to comparisson, prompt user which axis they want to compare. Make it selectable from within the Comparison view as well (checkboxes) \n\nBasically the comparison view should allow for dynamically changing the selection of comparisons. Simply add a test execution to comparison and from the Execution Card, select which axes to show (appending to the execution card, not replacing it).\n\nEvaluate the best UX experience for solving this issue. Comparisons should be easy and functional.",
-      "severity": "Medium",
+      "severity": "Critical",
       "owner": "Codex",
       "status": "Open",
-      "lastUpdated": "2025-11-18T08:51:43.209Z"
+      "lastUpdated": "2025-11-18T09:02:39.376Z"
     },
     {
       "id": "1763454478950_defect",
@@ -190,6 +190,15 @@
       "owner": "Codex",
       "status": "Open",
       "lastUpdated": "2025-11-18T08:55:15.917Z"
+    },
+    {
+      "id": "1763456573783_defect",
+      "title": "Add Defect IDs",
+      "description": "Defect IDs must be added to the far left of the Defect table",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T09:03:27.380Z"
     }
   ]
 }
