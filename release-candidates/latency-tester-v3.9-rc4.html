@@ -57,6 +57,16 @@
         };
         const COMPARISON_STORAGE_KEY = 'latencyTesterComparisonQueue';
         const AVAILABLE_VIEWS = ['execution', 'hardware', 'comparison', 'traceability', 'report', 'defects', 'requirements'];
+        const DISTANCE_METRIC_OPTIONS = [
+            { value: 'min', label: 'Min respond' },
+            { value: 'max', label: 'Max tested' },
+            { value: 'out-of-range', label: 'Out-of-range guard' }
+        ];
+        const COMPARISON_DATA_VIEWS = [
+            { value: 'cards', label: 'Cards' },
+            { value: 'matrix', label: 'Matrix' },
+            { value: 'statistics', label: 'Statistics' }
+        ];
 
         const deriveInitialView = () => {
             if (typeof window === 'undefined') return 'execution';
@@ -172,7 +182,7 @@
             });
             return flattened;
         };
-        const executionHasComparableSamples = (execution) => {
+        const executionHasComparableTestRuns = (execution) => {
             if (!execution?.timestamps) return false;
             return execution.timestamps.some(ts =>
                 !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
@@ -305,6 +315,11 @@
             const [activeExecution, setActiveExecution] = useState(null);
             const [comparisonExecutions, setComparisonExecutions] = useState(() => loadComparisonQueue());
             const [selectedComparisonAxis, setSelectedComparisonAxis] = useState(null);
+            const [comparisonDataView, setComparisonDataView] = useState('cards');
+            const [axisDistanceMetricOverrides, setAxisDistanceMetricOverrides] = useState({});
+            const [statisticsAxis, setStatisticsAxis] = useState(null);
+            const [statisticsDistanceMetric, setStatisticsDistanceMetric] = useState('max');
+            const [statisticsExecutionFilter, setStatisticsExecutionFilter] = useState({});
             const [view, setView] = useState(() => deriveInitialView()); // execution, hardware, comparison, report, traceability, defects, requirements
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
             const [selectedForReport, setSelectedForReport] = useState([]);
@@ -393,13 +408,56 @@
 
             useEffect(() => {
                 setSelectedComparisonAxis(prev => {
-                    const axisOptions = getComparisonAxisOptions(comparisonExecutions);
-                    if (prev && axisOptions.includes(prev)) {
+                    if (prev && comparisonAxisOptions.includes(prev)) {
                         return prev;
                     }
-                    return axisOptions[0] || null;
+                    return comparisonAxisOptions[0] || null;
+                });
+            }, [comparisonAxisOptions]);
+
+            useEffect(() => {
+                setStatisticsAxis(prev => {
+                    if (prev && comparisonAxisOptions.includes(prev)) {
+                        return prev;
+                    }
+                    return comparisonAxisOptions[0] || null;
+                });
+            }, [comparisonAxisOptions]);
+
+            useEffect(() => {
+                setStatisticsExecutionFilter(prev => {
+                    const next = { ...prev };
+                    comparisonExecutions.forEach(entry => {
+                        if (typeof next[entry.key] === 'undefined') {
+                            next[entry.key] = true;
+                        }
+                    });
+                    const validKeys = new Set(comparisonExecutions.map(entry => entry.key));
+                    Object.keys(next).forEach(key => {
+                        if (!validKeys.has(key)) {
+                            delete next[key];
+                        }
+                    });
+                    return next;
                 });
             }, [comparisonExecutions]);
+
+            const setStatisticsExecutionFilterValue = (key, value) => {
+                setStatisticsExecutionFilter(prev => ({
+                    ...prev,
+                    [key]: value
+                }));
+            };
+
+            const setAllStatisticsExecutionFilters = (value) => {
+                setStatisticsExecutionFilter(() => {
+                    const next = {};
+                    comparisonExecutions.forEach(entry => {
+                        next[entry.key] = value;
+                    });
+                    return next;
+                });
+            };
 
             useEffect(() => {
                 const handleHashChange = () => {
@@ -428,6 +486,10 @@
                 });
                 return entries.sort((a, b) => a.label.localeCompare(b.label));
             }, [testCases]);
+
+            const comparisonAxisOptions = useMemo(() => {
+                return getComparisonAxisOptions(comparisonExecutions);
+            }, [comparisonExecutions]);
 
             const getExecutionSummaryForDiff = (ref) => {
                 if (!ref) return null;
@@ -735,7 +797,7 @@
 
             const getRequirementConfigForTestCase = (testCase) => {
                 if (!testCase) return null;
-                const template = getRequirementTemplateById(testCase.requirementTemplateId);
+                const template = requirementTemplates.find(t => t.id === testCase.requirementTemplateId);
                 if (template) {
                     return mergeExecutionRequirements(template.config);
                 }
@@ -1277,6 +1339,88 @@
 
                 return { min, max, avg, total: validTimestamps.length, passed, failed, passRate, errorCount };
             }
+
+            const summarizeLatencyValues = (values = []) => {
+                if (!values.length) {
+                    return null;
+                }
+                const sorted = [...values].sort((a, b) => a - b);
+                const min = sorted[0];
+                const max = sorted[sorted.length - 1];
+                const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+                const variance = values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / values.length;
+                const stdDev = Math.sqrt(variance);
+                const median = sorted.length % 2 === 0
+                    ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+                    : sorted[Math.floor(sorted.length / 2)];
+                const percentile = (p) => {
+                    if (!sorted.length) return null;
+                    const rank = (sorted.length - 1) * p;
+                    const lower = Math.floor(rank);
+                    const upper = Math.ceil(rank);
+                    if (lower === upper) {
+                        return sorted[lower];
+                    }
+                    const weight = rank - lower;
+                    return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+                };
+                return {
+                    min,
+                    max,
+                    mean,
+                    median,
+                    stdDev,
+                    total: values.length,
+                    p90: percentile(0.9),
+                    p95: percentile(0.95)
+                };
+            };
+
+            const buildHistogramWithFit = (values = [], summary, bucketCount = 12) => {
+                if (!summary || !values.length) {
+                    return { bins: [], maxCount: 0 };
+                }
+                const min = summary.min;
+                const max = summary.max;
+                const span = Math.max(max - min, 1);
+                const binWidth = span / bucketCount;
+                const bins = Array.from({ length: bucketCount }, (_val, index) => {
+                    const start = min + index * binWidth;
+                    const end = index === bucketCount - 1 ? max : min + (index + 1) * binWidth;
+                    return {
+                        start,
+                        end,
+                        midpoint: start + (binWidth / 2),
+                        count: 0,
+                        label: `${(start / 1000).toFixed(2)}-${(end / 1000).toFixed(2)}s`
+                    };
+                });
+                values.forEach(value => {
+                    let index = Math.floor((value - min) / binWidth);
+                    if (!isFinite(index) || index < 0) index = 0;
+                    if (index >= bucketCount) index = bucketCount - 1;
+                    bins[index].count += 1;
+                });
+                const maxCount = Math.max(...bins.map(bin => bin.count), 1);
+                const { mean, stdDev } = summary;
+                let maxFitDensity = 0;
+                bins.forEach(bin => {
+                    if (stdDev === 0) {
+                        bin.fitDensity = bin.midpoint === mean ? 1 : 0;
+                    } else {
+                        const exponent = -0.5 * Math.pow((bin.midpoint - mean) / stdDev, 2);
+                        bin.fitDensity = (1 / (stdDev * Math.sqrt(2 * Math.PI))) * Math.exp(exponent);
+                    }
+                    if (bin.fitDensity > maxFitDensity) {
+                        maxFitDensity = bin.fitDensity;
+                    }
+                });
+                bins.forEach(bin => {
+                    const scaledFit = maxFitDensity > 0 ? (bin.fitDensity / maxFitDensity) * maxCount : 0;
+                    bin.fitScaled = scaledFit;
+                });
+                return { bins, maxCount };
+            };
 
             const UNGROUPED_BUCKET = 'Ungrouped';
 
@@ -1848,6 +1992,33 @@
                 return details ? details.value : null;
             };
 
+            const getAxisDistanceMetricValue = (testCase, axisKey, metric = 'max') => {
+                if (!testCase || !axisKey) return null;
+                const axis = axisKey[0];
+                if (!axis) return null;
+                const manualDistances = testCase.distances || {};
+                const manualValue = hasDistanceValue(manualDistances[axisKey])
+                    ? manualDistances[axisKey]
+                    : hasDistanceValue(manualDistances[axis])
+                        ? manualDistances[axis]
+                        : null;
+                const template = getRequirementTemplateById(testCase.requirementTemplateId);
+                const minRespond = template?.config?.minRespondRanges?.[axis];
+                const mustNotRespond = template?.config?.mustNotRespondRanges?.[axis];
+                if (metric === 'min') {
+                    return minRespond ?? manualValue ?? null;
+                }
+                if (metric === 'out-of-range') {
+                    return mustNotRespond ?? manualValue ?? null;
+                }
+                return manualValue ?? mustNotRespond ?? minRespond ?? null;
+            };
+
+            const getDistanceMetricLabel = (metric) => {
+                const option = DISTANCE_METRIC_OPTIONS.find(opt => opt.value === metric);
+                return option ? option.label : 'Distance';
+            };
+
             const updateTestCaseEnvironmentField = (field, value) => {
                 setTestCases(testCases.map(tc => {
                     if (tc.id === activeTestCase) {
@@ -2103,12 +2274,12 @@
                 const targetExecution = targetTestCase?.executions.find(ex => ex.id === executionId);
                 if (!targetTestCase || !targetExecution) return;
 
-                const hasComparableSamples = targetExecution.timestamps.some(ts =>
+                const hasComparableTestRuns = targetExecution.timestamps.some(ts =>
                     !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
                 );
 
-                if (!hasComparableSamples) {
-                    alert('No comparable measurements found for this execution.');
+                if (!hasComparableTestRuns) {
+                    alert('No comparable test runs found for this execution.');
                     return;
                 }
 
@@ -2214,6 +2385,30 @@
                 }));
             };
 
+            const isAxisSelectedForComparison = (testCaseId, executionId, axisKey) => {
+                const entryKey = `${testCaseId}-${executionId}`;
+                const entry = comparisonExecutions.find(item => item.key === entryKey);
+                return entry?.axisKeys?.includes(axisKey) || false;
+            };
+
+            const toggleAxisSelectionInExecution = (testCaseId, executionId, axisKey, isEnabled) => {
+                const entryKey = `${testCaseId}-${executionId}`;
+                const existingEntry = comparisonExecutions.find(entry => entry.key === entryKey);
+
+                if (!isEnabled) {
+                    if (!existingEntry) return;
+                    handleComparisonAxisToggle(entryKey, axisKey, false);
+                    return;
+                }
+
+                if (existingEntry) {
+                    handleComparisonAxisToggle(entryKey, axisKey, true);
+                    return;
+                }
+
+                addToComparison(testCaseId, executionId, [axisKey]);
+            };
+
             const openComparisonInNewTab = () => {
                 if (typeof window === 'undefined') return;
                 const base = window.location.href.split('#')[0];
@@ -2283,7 +2478,7 @@
             // Get current test case and execution
             const currentTestCase = testCases.find(tc => tc.id === activeTestCase);
             const currentExecution = currentTestCase?.executions.find(ex => ex.id === activeExecution);
-            const currentExecutionHasComparableSamples = executionHasComparableSamples(currentExecution);
+            const currentExecutionHasComparableTestRuns = executionHasComparableTestRuns(currentExecution);
 
             // Requirements Settings View
             const renderRequirementsView = () => (
@@ -2691,7 +2886,7 @@
                                                         <div className="text-2xl font-bold text-gray-600">
                                                             {overallStats.total}
                                                         </div>
-                                                        <div className="text-sm text-gray-600">Count</div>
+                                                        <div className="text-sm text-gray-600">Test runs</div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -2706,7 +2901,7 @@
                                                             <th className="px-4 py-2 text-right">Min</th>
                                                             <th className="px-4 py-2 text-right">Avg</th>
                                                             <th className="px-4 py-2 text-right">Max</th>
-                                                            <th className="px-4 py-2 text-right">Count</th>
+                                                            <th className="px-4 py-2 text-right">Test runs</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
@@ -3456,7 +3651,7 @@
                                     Open comparison in new tab
                                 </button>
                             </div>
-                            <p className="text-xs text-gray-500 mt-4">Axis selections persist between sessions. You can also toggle axes directly from the comparison cards.</p>
+                            <p className="text-xs text-gray-500 mt-4">Axis selections persist between sessions. You can also toggle axes directly from the execution tables.</p>
                         </div>
                     </div>
                 );
@@ -3473,7 +3668,7 @@
                             <>
                                 <p className="font-medium">{option.label}</p>
                                 <p className="text-xs text-gray-500">{describeDatasetSource(option.datasetSource)}</p>
-                                <p className="text-xs text-gray-500">FPS: {option.fps || '—'} · Samples: {option.timestampCount}</p>
+                                <p className="text-xs text-gray-500">FPS: {option.fps || '—'} · Test runs: {option.timestampCount}</p>
                                 <p className="text-xs text-gray-500">Hardware entries: {option.hardwareCount}</p>
                             </>
                         ) : (
@@ -3618,9 +3813,9 @@
                                 <div className="flex flex-wrap gap-2 justify-end">
                                     <button
                                         onClick={() => openAxisSelectionPanel(currentTestCase.id, currentExecution.id)}
-                                        disabled={!currentExecutionHasComparableSamples}
-                                        title={currentExecutionHasComparableSamples ? 'Queue this execution for comparison' : 'No valid latency measurements available for comparison'}
-                                        className={`px-3 py-1 rounded ${currentExecutionHasComparableSamples ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-200 text-blue-800 cursor-not-allowed'}`}
+                                        disabled={!currentExecutionHasComparableTestRuns}
+                                        title={currentExecutionHasComparableTestRuns ? 'Queue this execution for comparison' : 'No valid latency measurements available for comparison'}
+                                        className={`px-3 py-1 rounded ${currentExecutionHasComparableTestRuns ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-200 text-blue-800 cursor-not-allowed'}`}
                                     >
                                         <Icon name="git-compare" /> Add to Comparison
                                     </button>
@@ -4123,7 +4318,7 @@
                                 </div>
                                 <div>
                                     <div className="text-lg font-bold text-gray-600">{overallStats.total}</div>
-                                    <div className="text-sm text-gray-600">Count</div>
+                                    <div className="text-sm text-gray-600">Test runs</div>
                                 </div>
                             </div>
                             {requirements.enabled && (
@@ -4192,9 +4387,12 @@
                                         : getAxisStatistics(axisTimestamps, axis, direction, requirements);
                                     const distanceDetails = !isUngrouped ? getDistanceDetailsForAxisKey(currentTestCase, axisKey) : null;
                                     const distance = distanceDetails?.value ?? null;
-                                    const axisHasComparableSamples = axisTimestamps.some(ts =>
+                                    const axisHasComparableTestRuns = axisTimestamps.some(ts =>
                                         !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
                                     );
+                                    const axisSelectedForComparison = !isUngrouped
+                                        ? isAxisSelectedForComparison(currentTestCase.id, currentExecution.id, axisKey)
+                                        : false;
                                     const diffRow = sessionDiffAxisMap[axisKey];
                                     const axisAnnotation = diffAnnotations[axisKey];
 
@@ -4232,14 +4430,20 @@
                                                             )}
                                                         </span>
                                                         {!isUngrouped && (
-                                                            <button
-                                                                onClick={() => openAxisSelectionPanel(activeTestCase, activeExecution, axisKey)}
-                                                                disabled={!axisHasComparableSamples}
-                                                                className={`inline-flex items-center gap-1 ${axisHasComparableSamples ? 'text-blue-600 hover:text-blue-800' : 'text-gray-400 cursor-not-allowed'}`}
-                                                                title={axisHasComparableSamples ? 'Add this axis to the comparison view' : 'No valid samples to compare'}
+                                                            <label
+                                                                className={`inline-flex items-center gap-2 ${axisHasComparableTestRuns ? 'text-blue-700' : 'text-gray-400'}`}
                                                             >
-                                                                <Icon name="git-compare" /> Compare axis
-                                                            </button>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    className="w-4 h-4"
+                                                                    checked={axisSelectedForComparison}
+                                                                    disabled={!axisHasComparableTestRuns}
+                                                                    onChange={(e) => toggleAxisSelectionInExecution(currentTestCase.id, currentExecution.id, axisKey, e.target.checked)}
+                                                                />
+                                                                <span>
+                                                                    {axisHasComparableTestRuns ? 'Include axis in comparison' : 'No comparable test runs'}
+                                                                </span>
+                                                            </label>
                                                         )}
                                                     </div>
                                                     {diffRow && (
@@ -4418,7 +4622,7 @@
                             if (!hw) return;
                             const hasDetails = hw.type || hw.name || hw.serialNumber || hw.version || hw.revision;
                             if (!hasDetails) return;
-                            usages.push({ hw, tc, ex, hasComparableSamples: executionHasComparableSamples(ex) });
+                            usages.push({ hw, tc, ex, hasComparableTestRuns: executionHasComparableTestRuns(ex) });
                         });
                     });
                 });
@@ -4455,7 +4659,7 @@
                         testCaseName: entry.tc.name,
                         executionId: entry.ex.id,
                         executionName: entry.ex.name,
-                        hasComparableSamples: entry.hasComparableSamples
+                        hasComparableTestRuns: entry.hasComparableTestRuns
                     });
                     return acc;
                 }, {});
@@ -4519,9 +4723,9 @@
                                                                 <span>{usage.testCaseName} · {usage.executionName}</span>
                                                                 <button
                                                                     onClick={() => openAxisSelectionPanel(usage.testCaseId, usage.executionId)}
-                                                                    disabled={!usage.hasComparableSamples}
-                                                                    title={usage.hasComparableSamples ? 'Add this execution to comparison' : 'No comparable latency measurements available'}
-                                                                    className={`inline-flex items-center gap-1 text-[11px] font-semibold ${usage.hasComparableSamples ? 'text-blue-700 hover:text-blue-900' : 'text-gray-400 cursor-not-allowed'}`}
+                                                                    disabled={!usage.hasComparableTestRuns}
+                                                                    title={usage.hasComparableTestRuns ? 'Add this execution to comparison' : 'No comparable test runs available'}
+                                                                    className={`inline-flex items-center gap-1 text-[11px] font-semibold ${usage.hasComparableTestRuns ? 'text-blue-700 hover:text-blue-900' : 'text-gray-400 cursor-not-allowed'}`}
                                                                 >
                                                                     <Icon name="git-compare" /> Compare
                                                                 </button>
@@ -4542,10 +4746,11 @@
             // Render comparison view
             const renderComparisonView = () => {
                 const axisComparisonEntries = flattenAxisComparisonEntries(comparisonExecutions);
-                const axisOptions = getComparisonAxisOptions(comparisonExecutions);
+                const axisOptions = comparisonAxisOptions;
                 const activeAxis = selectedComparisonAxis && axisOptions.includes(selectedComparisonAxis)
                     ? selectedComparisonAxis
                     : (axisOptions[0] || null);
+                const matrixDistanceMetric = activeAxis ? (axisDistanceMetricOverrides[activeAxis] || 'max') : 'max';
                 const axisMatrixRows = activeAxis
                     ? axisComparisonEntries
                         .filter(entry => entry.axisKey === activeAxis)
@@ -4560,13 +4765,13 @@
                                 return ts.axis && ts.direction && (ts.axis + ts.direction) === entry.axisKey;
                             });
                             const stats = getStatistics(filteredTimestamps, executionRequirements);
-                            const distanceDetails = entry.axisKey ? getDistanceDetailsForAxisKey(tc, entry.axisKey) : null;
+                            const metricValue = getAxisDistanceMetricValue(tc, entry.axisKey, matrixDistanceMetric);
                             return {
                                 key: entry.key,
                                 testCaseName: tc.name,
                                 executionName: ex.name,
                                 stats,
-                                distanceDetails
+                                distanceMetricValue: metricValue
                             };
                         })
                         .filter(Boolean)
@@ -4576,6 +4781,239 @@
                 const formatStat = (stats, metric) => {
                     if (!stats || stats.total === 0) return '—';
                     return `${stats[metric].toFixed(2)}ms`;
+                };
+
+                const activeStatisticsAxis = statisticsAxis && axisOptions.includes(statisticsAxis)
+                    ? statisticsAxis
+                    : (axisOptions[0] || null);
+
+                const renderStatisticsPanel = () => {
+                    if (comparisonExecutions.length === 0) {
+                        return (
+                            <div className="bg-white rounded-lg shadow p-6 text-sm text-gray-500">
+                                Queue at least one execution to unlock result statistics.
+                            </div>
+                        );
+                    }
+                    if (!activeStatisticsAxis) {
+                        return (
+                            <div className="bg-white rounded-lg shadow p-6 text-sm text-gray-500">
+                                Select axes in the execution view before exploring statistics.
+                            </div>
+                        );
+                    }
+
+                    const statsExecutionOptions = comparisonExecutions.map(entry => {
+                        const tc = testCases.find(testCase => testCase.id === entry.testCaseId);
+                        const ex = tc?.executions.find(exec => exec.id === entry.executionId);
+                        if (!tc || !ex) return null;
+                        const axisRunCount = ex.timestamps.filter(ts =>
+                            ts.axis && ts.direction && (ts.axis + ts.direction) === activeStatisticsAxis &&
+                            !ts.isError && !ts.excludeFromStats && ts.latencyMs != null
+                        ).length;
+                        return {
+                            key: entry.key,
+                            label: `${tc.name} · ${ex.name}`,
+                            count: axisRunCount,
+                            testCase: tc,
+                            execution: ex
+                        };
+                    }).filter(Boolean);
+
+                    if (statsExecutionOptions.length === 0) {
+                        return (
+                            <div className="bg-white rounded-lg shadow p-6 text-sm text-gray-500">
+                                No executions with axis data are available for statistics yet.
+                            </div>
+                        );
+                    }
+
+                    const enabledOptions = statsExecutionOptions.filter(option =>
+                        statisticsExecutionFilter[option.key] !== false && option.count > 0
+                    );
+
+                    const samples = [];
+                    enabledOptions.forEach(option => {
+                        option.execution.timestamps.forEach(ts => {
+                            if (
+                                ts.axis && ts.direction && (ts.axis + ts.direction) === activeStatisticsAxis &&
+                                !ts.isError && !ts.excludeFromStats && ts.latencyMs != null
+                            ) {
+                                samples.push({ value: ts.latencyMs, executionKey: option.key });
+                            }
+                        });
+                    });
+
+                    const values = samples.map(sample => sample.value);
+                    const summary = summarizeLatencyValues(values);
+                    const histogram = buildHistogramWithFit(values, summary);
+                    const distanceList = enabledOptions
+                        .map(option => ({
+                            key: option.key,
+                            label: option.label,
+                            value: getAxisDistanceMetricValue(option.testCase, activeStatisticsAxis, statisticsDistanceMetric)
+                        }))
+                        .filter(item => item.value != null);
+
+                    return (
+                        <div className="bg-white rounded-lg shadow p-6 space-y-6">
+                            <div className="flex flex-wrap items-start gap-6">
+                                <div>
+                                    <p className="text-xs uppercase text-gray-500">Axis</p>
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        {axisOptions.map(axis => (
+                                            <button
+                                                key={`stats-axis-${axis}`}
+                                                onClick={() => setStatisticsAxis(axis)}
+                                                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                                    activeStatisticsAxis === axis ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700'
+                                                }`}
+                                            >
+                                                {axis}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <p className="text-xs uppercase text-gray-500">Distance reference</p>
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        {DISTANCE_METRIC_OPTIONS.map(option => (
+                                            <button
+                                                key={`stats-distance-${option.value}`}
+                                                onClick={() => setStatisticsDistanceMetric(option.value)}
+                                                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                                    statisticsDistanceMetric === option.value ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-700'
+                                                }`}
+                                            >
+                                                {option.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <p className="text-xs uppercase text-gray-500">Device / test run filters</p>
+                                    <div className="flex gap-2 text-xs">
+                                        <button
+                                            onClick={() => setAllStatisticsExecutionFilters(true)}
+                                            className="text-blue-600 hover:text-blue-800"
+                                        >
+                                            Select all
+                                        </button>
+                                        <button
+                                            onClick={() => setAllStatisticsExecutionFilters(false)}
+                                            className="text-blue-600 hover:text-blue-800"
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="grid md:grid-cols-2 gap-2">
+                                    {statsExecutionOptions.map(option => {
+                                        const disabled = option.count === 0;
+                                        const checked = statisticsExecutionFilter[option.key] !== false;
+                                        return (
+                                            <label
+                                                key={`stats-filter-${option.key}`}
+                                                className={`flex items-center justify-between border rounded px-3 py-2 text-sm ${disabled ? 'opacity-60' : ''}`}
+                                            >
+                                                <div>
+                                                    <div className="font-semibold truncate">{option.label}</div>
+                                                    <div className="text-xs text-gray-500">{option.count} test runs</div>
+                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    disabled={disabled}
+                                                    onChange={(e) => setStatisticsExecutionFilterValue(option.key, e.target.checked)}
+                                                />
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {summary ? (
+                                <>
+                                    <div className="grid md:grid-cols-4 gap-4 text-sm">
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">Min</p>
+                                            <p className="text-lg font-bold text-green-600">{formatMsToTime(summary.min)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">Average</p>
+                                            <p className="text-lg font-bold text-blue-600">{formatMsToTime(summary.mean)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">P95</p>
+                                            <p className="text-lg font-bold text-amber-600">{formatMsToTime(summary.p95)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">Max</p>
+                                            <p className="text-lg font-bold text-red-600">{formatMsToTime(summary.max)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">Median</p>
+                                            <p className="text-lg font-bold text-slate-700">{formatMsToTime(summary.median)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">Std dev</p>
+                                            <p className="text-lg font-bold text-slate-700">{formatMsToTime(summary.stdDev)}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">Total test runs</p>
+                                            <p className="text-lg font-bold text-slate-700">{summary.total}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-xs uppercase text-gray-500">P90</p>
+                                            <p className="text-lg font-bold text-amber-600">{formatMsToTime(summary.p90)}</p>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs uppercase text-gray-500 mb-2">Histogram + normal fit</p>
+                                        {histogram.bins.length === 0 ? (
+                                            <p className="text-sm text-gray-500">Select executions with valid test runs to render the histogram.</p>
+                                        ) : (
+                                            <div className="flex items-end gap-2 h-48">
+                                                {histogram.bins.map(bin => {
+                                                    const barHeight = histogram.maxCount > 0 ? (bin.count / histogram.maxCount) * 100 : 0;
+                                                    const fitHeight = histogram.maxCount > 0 ? (bin.fitScaled / histogram.maxCount) * 100 : 0;
+                                                    return (
+                                                        <div key={`${bin.start}-${bin.end}`} className="flex-1">
+                                                            <div className="relative h-40 flex items-end justify-center">
+                                                                <div className="w-3/4 bg-blue-500 rounded-t" style={{ height: `${barHeight}%` }}></div>
+                                                                <div className="w-1/2 bg-emerald-400 opacity-70 rounded-t absolute bottom-0" style={{ height: `${fitHeight}%` }}></div>
+                                                            </div>
+                                                            <p className="text-[10px] text-center mt-1 text-gray-600">{bin.label}</p>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <p className="text-xs uppercase text-gray-500 mb-2">Distance references ({getDistanceMetricLabel(statisticsDistanceMetric)})</p>
+                                        {distanceList.length === 0 ? (
+                                            <p className="text-sm text-gray-500">No distance references available for this metric.</p>
+                                        ) : (
+                                            <ul className="space-y-1 text-sm">
+                                                {distanceList.map(item => (
+                                                    <li key={`distance-${item.key}`} className="flex items-center justify-between">
+                                                        <span className="font-medium">{item.label}</span>
+                                                        <span className="font-mono">{item.value}mm</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+                                </>
+                            ) : (
+                                <p className="text-sm text-gray-500">Select devices with valid test runs to visualize result statistics.</p>
+                            )}
+                        </div>
+                    );
                 };
 
                 return (
@@ -4602,92 +5040,124 @@
                             </div>
                         )}
 
-                        <div className="bg-white rounded-lg shadow p-6">
-                            <div className="flex flex-wrap items-center justify-between gap-4">
-                                <div>
-                                    <h2 className="text-xl font-semibold">Axis Comparison Matrix</h2>
-                                    <p className="text-sm text-gray-500">Highlight per-axis statistics across executions.</p>
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    {axisOptions.map(axis => (
-                                        <button
-                                            key={axis}
-                                            onClick={() => setSelectedComparisonAxis(axis)}
-                                            className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
-                                                activeAxis === axis ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700'
-                                            }`}
-                                        >
-                                            {axis}
-                                        </button>
-                                    ))}
-                                </div>
+                        <div className="bg-white rounded-lg shadow p-4">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-semibold text-gray-700">Data view</span>
+                                {COMPARISON_DATA_VIEWS.map(option => (
+                                    <button
+                                        key={option.value}
+                                        onClick={() => setComparisonDataView(option.value)}
+                                        className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                            comparisonDataView === option.value ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700'
+                                        }`}
+                                    >
+                                        {option.label}
+                                    </button>
+                                ))}
                             </div>
-                            <div className="mt-4">
-                                {axisMatrixRows.length > 0 ? (
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm">
-                                            <thead className="bg-gray-50">
-                                                <tr>
-                                                    <th className="px-4 py-2 text-left">Test Case</th>
-                                                    <th className="px-4 py-2 text-left">Execution</th>
-                                                    <th className="px-4 py-2 text-right">Min</th>
-                                                    <th className="px-4 py-2 text-right">Avg</th>
-                                                    <th className="px-4 py-2 text-right">Max</th>
-                                                    <th className="px-4 py-2 text-center">Samples</th>
-                                                    <th className="px-4 py-2 text-left">Distance</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {axisMatrixRows.map(row => (
-                                                    <tr key={row.key} className="border-b">
-                                                        <td className="px-4 py-2">{row.testCaseName}</td>
-                                                        <td className="px-4 py-2">{row.executionName}</td>
-                                                        <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.min)}</td>
-                                                        <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.avg)}</td>
-                                                        <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.max)}</td>
-                                                        <td className="px-4 py-2 text-center">{row.stats.total}</td>
-                                                        <td className="px-4 py-2">
-                                                            {row.distanceDetails?.value != null
-                                                                ? `${row.distanceDetails.value}mm`
-                                                                : 'N/A'}
-                                                            {row.distanceDetails?.source === 'manual' && (
-                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold">Manual</span>
-                                                            )}
-                                                            {row.distanceDetails?.source === 'template' && (
-                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-xs font-semibold">{row.distanceDetails.templateName || 'Template'}</span>
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : (
-                                    <p className="text-sm text-gray-500">Add axis-specific cards to populate this matrix.</p>
-                                )}
-                            </div>
+                            <p className="text-xs text-gray-500 mt-2">Switch between comparison cards, the enhanced matrix, and aggregate statistics without reloading.</p>
                         </div>
 
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                                <h2 className="text-xl font-semibold">Execution Cards</h2>
-                                {hasComparisonCards && (
-                                    <button
-                                        onClick={() => setComparisonExecutions([])}
-                                        className="text-sm text-red-600 hover:text-red-800"
-                                    >
-                                        Clear all
-                                    </button>
-                                )}
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {!hasComparisonCards && (
-                                    <div className="bg-white rounded-lg shadow p-4 text-gray-500 text-sm">
-                                        <p>No executions added to comparison yet.</p>
-                                        <p className="mt-1">Use "Add to Comparison" in the execution view to populate this dashboard.</p>
+                        {comparisonDataView === 'matrix' && (
+                            <div className="bg-white rounded-lg shadow p-6">
+                                <div className="flex flex-wrap items-center justify-between gap-4">
+                                    <div>
+                                        <h2 className="text-xl font-semibold">Axis Comparison Matrix</h2>
+                                        <p className="text-sm text-gray-500">Highlight per-axis statistics across executions.</p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {axisOptions.map(axis => (
+                                            <button
+                                                key={`matrix-axis-${axis}`}
+                                                onClick={() => setSelectedComparisonAxis(axis)}
+                                                className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                                    activeAxis === axis ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700'
+                                                }`}
+                                            >
+                                                {axis}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {activeAxis && (
+                                    <div className="flex flex-wrap items-center gap-2 mt-4">
+                                        <p className="text-xs uppercase text-gray-500">Distance metric for {activeAxis}</p>
+                                        {DISTANCE_METRIC_OPTIONS.map(option => (
+                                            <button
+                                                key={`matrix-distance-${option.value}`}
+                                                onClick={() => setAxisDistanceMetricOverrides(prev => ({
+                                                    ...prev,
+                                                    [activeAxis]: option.value
+                                                }))}
+                                                className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
+                                                    matrixDistanceMetric === option.value ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-800'
+                                                }`}
+                                            >
+                                                {option.label}
+                                            </button>
+                                        ))}
                                     </div>
                                 )}
-                                {comparisonExecutions.map(comp => {
+                                <div className="mt-4">
+                                    {axisMatrixRows.length > 0 ? (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-gray-50">
+                                                    <tr>
+                                                        <th className="px-4 py-2 text-left">Test Case</th>
+                                                        <th className="px-4 py-2 text-left">Execution</th>
+                                                        <th className="px-4 py-2 text-right">Min</th>
+                                                        <th className="px-4 py-2 text-right">Avg</th>
+                                                        <th className="px-4 py-2 text-right">Max</th>
+                                                        <th className="px-4 py-2 text-center">Test runs</th>
+                                                        <th className="px-4 py-2 text-left">Distance ({getDistanceMetricLabel(matrixDistanceMetric)})</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {axisMatrixRows.map(row => (
+                                                        <tr key={row.key} className="border-b">
+                                                            <td className="px-4 py-2">{row.testCaseName}</td>
+                                                            <td className="px-4 py-2">{row.executionName}</td>
+                                                            <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.min)}</td>
+                                                            <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.avg)}</td>
+                                                            <td className="px-4 py-2 text-right font-mono">{row.stats.total === 0 ? '—' : formatMsToTime(row.stats.max)}</td>
+                                                            <td className="px-4 py-2 text-center">{row.stats.total}</td>
+                                                            <td className="px-4 py-2">{row.distanceMetricValue != null ? `${row.distanceMetricValue}mm` : 'N/A'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-gray-500">Add axis-specific cards to populate this matrix.</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {comparisonDataView === 'statistics' && renderStatisticsPanel()}
+
+                        {comparisonDataView === 'cards' && (
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <h2 className="text-xl font-semibold">Execution Cards</h2>
+                                    {hasComparisonCards && (
+                                        <button
+                                            onClick={() => setComparisonExecutions([])}
+                                            className="text-sm text-red-600 hover:text-red-800"
+                                        >
+                                            Clear all
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {!hasComparisonCards && (
+                                        <div className="bg-white rounded-lg shadow p-4 text-gray-500 text-sm">
+                                            <p>No executions added to comparison yet.</p>
+                                            <p className="mt-1">Use "Add to Comparison" in the execution view to populate this dashboard.</p>
+                                        </div>
+                                    )}
+                                    {comparisonExecutions.map(comp => {
                                     const tc = testCases.find(testCase => testCase.id === comp.testCaseId);
                                     const ex = tc?.executions.find(exec => exec.id === comp.executionId);
 
@@ -4713,7 +5183,6 @@
                                         !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
                                     );
                                     const stats = getStatistics(filteredTimestamps, executionRequirements);
-                                    const axisOptionsForCard = getComparableAxisOptions(ex);
                                     const selectedAxes = comp.axisKeys || [];
                                     const uniqueSelectedAxes = Array.from(new Set(selectedAxes));
                                     const activeAxis = selectedComparisonAxis;
@@ -4778,7 +5247,7 @@
                                                         })}
                                                     </div>
                                                 ) : (
-                                                    <p className="text-xs text-amber-700 mt-1">No axes selected yet — toggle filters below to populate this card.</p>
+                                                    <p className="text-xs text-amber-700 mt-1">No axes selected yet — use the execution view checkboxes to add one.</p>
                                                 )}
                                             </div>
                                             {stats.total === 0 ? (
@@ -4798,7 +5267,7 @@
                                                         <span className="font-mono font-bold text-red-600">{formatMsToTime(stats.max)}</span>
                                                     </div>
                                                     <div className="flex justify-between border-t pt-2">
-                                                        <span className="text-gray-600">Count:</span>
+                                                        <span className="text-gray-600">Test runs:</span>
                                                         <span className="font-bold">{stats.total}</span>
                                                     </div>
                                                     {executionRequirements.enabled && (
@@ -4811,7 +5280,7 @@
                                             )}
                                             <div className="mt-4 border-t pt-3 space-y-2">
                                                 <div className="flex items-center justify-between">
-                                                    <p className="text-xs uppercase text-gray-500 tracking-wide">Axis filters</p>
+                                                    <p className="text-xs uppercase text-gray-500 tracking-wide">Axis selections</p>
                                                     <button
                                                         onClick={() => openAxisSelectionPanel(comp.testCaseId, comp.executionId)}
                                                         className="text-xs text-blue-600 hover:text-blue-800"
@@ -4819,34 +5288,11 @@
                                                         Bulk edit
                                                     </button>
                                                 </div>
-                                                {axisOptionsForCard.length === 0 ? (
-                                                    <p className="text-sm text-gray-500">No tagged axes yet. Assign directions in the execution view.</p>
-                                                ) : (
-                                                    <div className="space-y-2">
-                                                        {axisOptionsForCard.map(option => {
-                                                            const checked = selectedAxes.includes(option.key);
-                                                            return (
-                                                                <label key={option.key} className="flex items-center justify-between text-sm border rounded px-3 py-1.5">
-                                                                    <div className="flex items-center gap-2">
-                                                                        <input
-                                                                            type="checkbox"
-                                                                            checked={checked}
-                                                                            onChange={(e) => handleComparisonAxisToggle(comp.key, option.key, e.target.checked)}
-                                                                        />
-                                                                        <span className="font-medium">{option.key}</span>
-                                                                        <span className="text-xs text-gray-500">{option.count} samples</span>
-                                                                        {activeAxis === option.key && (
-                                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">Active</span>
-                                                                        )}
-                                                                    </div>
-                                                                </label>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                )}
-                                                <p className="text-xs text-gray-500">Checked axes feed the comparison matrix. Uncheck to hide them without leaving this page.</p>
+                                                <p className="text-xs text-gray-500">
+                                                    Manage axes from the execution tables using the new per-axis checkboxes. Use bulk edit for quick adjustments without leaving this page.
+                                                </p>
                                                 {uniqueSelectedAxes.length === 0 && (
-                                                    <p className="text-xs text-amber-700">No axes selected yet — toggle one above to start a comparison.</p>
+                                                    <p className="text-xs text-amber-700">No axes selected yet — open the execution view to tag one.</p>
                                                 )}
                                             </div>
                                         </div>
