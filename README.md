@@ -4,8 +4,8 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 
 ## Functionality Overview
 - **Latency execution workspace (production)** – `latency-tester-v3.8.1.html` remains the supported release for operations and certification work. It contains the multi-view React interface with FPS auto-detection, per-axis distances, grouped error handling, include/exclude toggles, and PDF-ready reporting. (See `v3.8-release-notes.md` for the full feature rundown.)
-- **Release candidate sandbox** – `release-candidates/latency-tester-v3.9-rc3.html` exposes the in-progress requirement template workflow along with the defect register view. It automatically reads/writes `release-candidates/v3.9-rc3-defects.json`, and the historical `v3.9-rc1-defects.json` document catalogs the backlog that fed this RC.
-- **Axis-aware comparison + FPS tuning** – RC3 adds a dedicated axis comparison matrix, card-level highlights, and per-execution FPS recalculations so reviewers can see exactly which direction is being evaluated and correct any 30 fps rounding that DaVinci exports introduce.
+- **Release candidate sandbox** – `release-candidates/latency-tester-v3.9-rc4.html` exposes the in-progress requirement template workflow along with the defect register view. It automatically reads/writes `release-candidates/v3.9-rc4-defects.json`, and the historical `v3.9-rc1-defects.json` document catalogs the backlog that fed this RC.
+- **Axis-aware comparison + FPS tuning** – RC4 keeps the axis comparison matrix introduced earlier while relocating the “Add to comparison” affordance into every execution/device row, emphasizing axis/distance badges on each comparison card, and exposing a dedicated pass/fail indicator so reviewers instantly understand what each card represents.
 - **Curated archives** – Deprecated HTML builds, the JSX playground, portable/offline variants, and legacy release notes now live under `archive/` (for example `archive/legacy-html/latency-tester-portable.html`). This keeps the repo root focused on the currently supported deliverables while still preserving history for reference.
 - **DaVinci Resolve marker support** – Timestamp parsing honors the marker naming convention introduced in v3.0, including axis/direction metadata extraction, automatic pairing, and error detection noted in the legacy feature guides stored in `archive/docs/`.
 - **Reporting & exports** – v3.2 and later releases expose JSON/CSV/PDF exports, per-axis statistics, requirements compliance summaries, and distance-aware report layouts, enabling teams to adopt whichever artifact best fits their process (`v3.2-release-notes.md`, `v3.4-release-notes.md`).
@@ -18,9 +18,9 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 4. Export CSV/JSON/PDF artifacts directly from the UI for archival or sharing.
 
 ### Evaluate the v3.9 Release Candidate
-1. Navigate to `release-candidates/` and open `latency-tester-v3.9-rc3.html`.
+1. Navigate to `release-candidates/` and open `latency-tester-v3.9-rc4.html`.
 2. Treat the UI banner and the dedicated **Defects** view as a reminder that this is not production software.
-3. Add, edit, or delete defects either directly inside the GUI or by editing `release-candidates/v3.9-rc3-defects.json`. The import/export buttons accept that JSON file so you can round-trip the canonical document without touching test-case data.
+3. Add, edit, or delete defects either directly inside the GUI or by editing `release-candidates/v3.9-rc4-defects.json`. The import/export buttons accept that JSON file so you can round-trip the canonical document without touching test-case data.
 4. Capture any new regressions in the defect register before promoting another RC.
 
 ### Legacy portable & historical builds

@@ -8,6 +8,12 @@ This document captures the functional evolution of the Hardware Latency Tester f
 - Comparison intelligence calls out requirement sources, pass/fail outcomes, and per-axis deltas so reviewers can reconcile multiple executions quickly (`v4.0-release-notes.md`).
 - Architecture/plan documents detail the upcoming media engine, marker management, pattern recognition, and export upgrades (video/waveform sync, WaveSurfer integration, template-based detection, FFmpeg.wasm packaging, etc.) as captured in `v4.0-architecture.md`.
 
+## [v3.9-rc4] - Release Candidate 4
+- Promotes the sandbox to `release-candidates/latency-tester-v3.9-rc4.html`, pointing the defect view at `v3.9-rc4-defects.json` while retaining the RC3 build for historical analysis.
+- Moves the comparison entry point into each execution header and device traceability row so whichever entity is selected automatically populates the comparison queue.
+- Enhances comparison cards with requirement template badges that only show the friendly name, explicit axis/direction and distance badges, and a dedicated pass/fail pill accompanied by a discrete remove-from-comparison affordance.
+- Keeps defect and requirements workflows aligned with the relocated comparison controls so hallway usability reviews can focus on validating the clarified axis/requirement context per card.
+
 ## [v3.9-rc3] - Release Candidate 3
 - Promotes the sandbox to `release-candidates/latency-tester-v3.9-rc3.html`, pointing the defect view at `v3.9-rc3-defects.json` while preserving the original `v3.9-rc1-defects.json` backlog for reference.
 - Honors manual test-case distance overrides throughout the report and comparison dashboards and surfaces badges that reveal when a template value is supplying the bound.
