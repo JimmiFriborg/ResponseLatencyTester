@@ -42,6 +42,123 @@
             'manual-import': 'Manual Import',
             'automation-report': 'Automation Report'
         };
+        const COMPARISON_STORAGE_KEY = 'latencyTesterComparisonQueue';
+        const AVAILABLE_VIEWS = ['execution', 'hardware', 'comparison', 'traceability', 'report', 'defects', 'requirements'];
+
+        const deriveInitialView = () => {
+            if (typeof window === 'undefined') return 'execution';
+            const hash = window.location.hash?.replace('#', '') || '';
+            return AVAILABLE_VIEWS.includes(hash) ? hash : 'execution';
+        };
+
+        const trackAnalyticsEvent = (eventName, payload = {}) => {
+            try {
+                const event = {
+                    event: `latencyTester:${eventName}`,
+                    timestamp: new Date().toISOString(),
+                    ...payload
+                };
+                if (window?.dataLayer && typeof window.dataLayer.push === 'function') {
+                    window.dataLayer.push(event);
+                }
+                console.debug('[analytics]', event);
+            } catch (error) {
+                console.warn('Analytics tracking failed', error);
+            }
+        };
+
+        const safeLocalStorageGet = (key) => {
+            try {
+                return window?.localStorage?.getItem(key) || null;
+            } catch (_err) {
+                return null;
+            }
+        };
+
+        const safeLocalStorageSet = (key, value) => {
+            try {
+                window?.localStorage?.setItem(key, value);
+            } catch (_err) {
+                // Ignore storage errors (e.g., private mode)
+            }
+        };
+
+        const normalizeComparisonEntry = (entry) => {
+            if (!entry || !entry.testCaseId || !entry.executionId) {
+                return null;
+            }
+            const axisKeys = Array.isArray(entry.axisKeys)
+                ? entry.axisKeys.filter(Boolean)
+                : (entry.axisKey ? [entry.axisKey] : []);
+            return {
+                key: entry.key || `${entry.testCaseId}-${entry.executionId}`,
+                testCaseId: entry.testCaseId,
+                executionId: entry.executionId,
+                axisKeys: Array.from(new Set(axisKeys))
+            };
+        };
+
+        const loadComparisonQueue = () => {
+            if (typeof window === 'undefined') return [];
+            const stored = safeLocalStorageGet(COMPARISON_STORAGE_KEY);
+            if (!stored) return [];
+            try {
+                const parsed = JSON.parse(stored);
+                if (!Array.isArray(parsed)) return [];
+                return parsed
+                    .map(normalizeComparisonEntry)
+                    .filter(Boolean);
+            } catch (_err) {
+                return [];
+            }
+        };
+
+        const persistComparisonQueue = (entries) => {
+            if (typeof window === 'undefined') return;
+            safeLocalStorageSet(COMPARISON_STORAGE_KEY, JSON.stringify(entries));
+        };
+
+        const getComparableAxisOptions = (execution) => {
+            if (!execution?.timestamps) return [];
+            const counts = execution.timestamps.reduce((acc, ts) => {
+                if (ts.isError || ts.latencyMs == null || ts.excludeFromStats) return acc;
+                if (!ts.axis || !ts.direction) return acc;
+                const axisKey = ts.axis + ts.direction;
+                if (!AXIS_KEYS.includes(axisKey)) return acc;
+                acc[axisKey] = (acc[axisKey] || 0) + 1;
+                return acc;
+            }, {});
+            return Object.entries(counts)
+                .map(([key, count]) => ({ key, count }))
+                .sort((a, b) => a.key.localeCompare(b.key));
+        };
+
+        const getComparisonAxisOptions = (entries = []) => {
+            const axisSet = new Set();
+            entries.forEach(entry => {
+                (entry?.axisKeys || []).forEach(axisKey => {
+                    if (axisKey) {
+                        axisSet.add(axisKey);
+                    }
+                });
+            });
+            return Array.from(axisSet).sort();
+        };
+
+        const flattenAxisComparisonEntries = (entries = []) => {
+            const flattened = [];
+            entries.forEach(entry => {
+                (entry?.axisKeys || []).forEach(axisKey => {
+                    flattened.push({
+                        key: `${entry.key}-${axisKey}`,
+                        axisKey,
+                        testCaseId: entry.testCaseId,
+                        executionId: entry.executionId
+                    });
+                });
+            });
+            return flattened;
+        };
         const hasDistanceValue = (value) => value !== undefined && value !== null && value !== '';
         const DEFECT_STATUSES = ['Open', 'Investigating', 'In Progress', 'Blocked', 'Resolved'];
         const DEFECT_SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
@@ -167,9 +284,9 @@
             const [testCases, setTestCases] = useState([]);
             const [activeTestCase, setActiveTestCase] = useState(null);
             const [activeExecution, setActiveExecution] = useState(null);
-            const [comparisonExecutions, setComparisonExecutions] = useState([]);
+            const [comparisonExecutions, setComparisonExecutions] = useState(() => loadComparisonQueue());
             const [selectedComparisonAxis, setSelectedComparisonAxis] = useState(null);
-            const [view, setView] = useState('execution'); // execution, hardware, comparison, report, traceability, defects, requirements
+            const [view, setView] = useState(() => deriveInitialView()); // execution, hardware, comparison, report, traceability, defects, requirements
             const [showPassFailHighlight, setShowPassFailHighlight] = useState(true);
             const [selectedForReport, setSelectedForReport] = useState([]);
             const [requirementTemplates, setRequirementTemplates] = useState(() => [
@@ -196,9 +313,12 @@
             const [compareSessionsDialog, setCompareSessionsDialog] = useState(null);
             const [diffAnnotations, setDiffAnnotations] = useState({});
             const [copyDiffStatus, setCopyDiffStatus] = useState('');
+            const [axisSelectionPanel, setAxisSelectionPanel] = useState(null);
+            const [comparisonQueueStatus, setComparisonQueueStatus] = useState('');
 
             const importRef = useRef(null);
             const copyStatusTimeoutRef = useRef(null);
+            const comparisonStatusTimeoutRef = useRef(null);
 
             const executionExists = (ref) => {
                 if (!ref) return false;
@@ -213,6 +333,9 @@
                 return () => {
                     if (copyStatusTimeoutRef.current) {
                         clearTimeout(copyStatusTimeoutRef.current);
+                    }
+                    if (comparisonStatusTimeoutRef.current) {
+                        clearTimeout(comparisonStatusTimeoutRef.current);
                     }
                 };
             }, []);
@@ -242,14 +365,27 @@
             }, []);
 
             useEffect(() => {
+                persistComparisonQueue(comparisonExecutions);
+            }, [comparisonExecutions]);
+
+            useEffect(() => {
                 setSelectedComparisonAxis(prev => {
-                    if (prev && comparisonExecutions.some(entry => entry.axisKey === prev)) {
+                    const axisOptions = getComparisonAxisOptions(comparisonExecutions);
+                    if (prev && axisOptions.includes(prev)) {
                         return prev;
                     }
-                    const firstAxis = comparisonExecutions.find(entry => entry.axisKey)?.axisKey || null;
-                    return firstAxis || null;
+                    return axisOptions[0] || null;
                 });
             }, [comparisonExecutions]);
+
+            useEffect(() => {
+                const handleHashChange = () => {
+                    const nextView = deriveInitialView();
+                    setView(prev => prev === nextView ? prev : nextView);
+                };
+                window.addEventListener('hashchange', handleHashChange);
+                return () => window.removeEventListener('hashchange', handleHashChange);
+            }, []);
 
             const encodeExecutionKey = (testCaseId, executionId) => `${testCaseId}::${executionId}`;
             const decodeExecutionKey = (value) => {
@@ -410,11 +546,14 @@
             };
 
             const changeView = (nextView) => {
-                if (view === nextView) return;
+                if (!AVAILABLE_VIEWS.includes(nextView)) return;
                 if (view === 'requirements' && nextView !== 'requirements') {
                     if (!confirmTemplateNavigation()) {
                         return;
                     }
+                }
+                if (typeof window !== 'undefined') {
+                    window.location.hash = `#${nextView}`;
                 }
                 setView(nextView);
             };
@@ -1967,37 +2106,138 @@
                 setTestCases(updated);
             };
 
-            const addToComparison = (testCaseId, executionId, axisKey = null) => {
+            const addToComparison = (testCaseId, executionId, axisKeys = []) => {
                 const targetTestCase = testCases.find(tc => tc.id === testCaseId);
                 const targetExecution = targetTestCase?.executions.find(ex => ex.id === executionId);
                 if (!targetTestCase || !targetExecution) return;
 
-                const hasComparableSamples = targetExecution.timestamps.some(ts => {
-                    if (ts.isError || ts.latencyMs == null || ts.excludeFromStats) return false;
-                    if (!axisKey) return true;
-                    if (!ts.axis || !ts.direction) return false;
-                    return (ts.axis + ts.direction) === axisKey;
-                });
+                const hasComparableSamples = targetExecution.timestamps.some(ts =>
+                    !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
+                );
 
                 if (!hasComparableSamples) {
-                    alert(axisKey ? 'No comparable measurements for this axis were found.' : 'No comparable measurements found for this execution.');
+                    alert('No comparable measurements found for this execution.');
                     return;
                 }
 
-                const entryKey = `${testCaseId}-${executionId}-${axisKey || 'execution'}`;
+                const comparableAxisKeys = getComparableAxisOptions(targetExecution).map(option => option.key);
+                const normalizedAxisKeys = Array.isArray(axisKeys)
+                    ? axisKeys.filter(axisKey => comparableAxisKeys.includes(axisKey))
+                    : [];
+                const entryKey = `${testCaseId}-${executionId}`;
 
                 setComparisonExecutions(prev => {
-                    if (prev.some(entry => entry.key === entryKey)) {
-                        return prev;
+                    const existing = prev.find(entry => entry.key === entryKey);
+                    if (existing) {
+                        const currentAxisSet = new Set(existing.axisKeys || []);
+                        const newlyAdded = [];
+                        normalizedAxisKeys.forEach(axisKey => {
+                            if (!currentAxisSet.has(axisKey)) {
+                                currentAxisSet.add(axisKey);
+                                newlyAdded.push(axisKey);
+                            }
+                        });
+                        if (newlyAdded.length > 0) {
+                            newlyAdded.forEach(axisKey =>
+                                trackAnalyticsEvent('axis_compare_added', { testCaseId, executionId, axisKey })
+                            );
+                        }
+                        return prev.map(entry =>
+                            entry.key === entryKey
+                                ? { ...entry, axisKeys: Array.from(currentAxisSet) }
+                                : entry
+                        );
                     }
-                    return [...prev, { key: entryKey, testCaseId, executionId, axisKey }];
+
+                    normalizedAxisKeys.forEach(axisKey =>
+                        trackAnalyticsEvent('axis_compare_added', { testCaseId, executionId, axisKey })
+                    );
+                    return [...prev, { key: entryKey, testCaseId, executionId, axisKeys: normalizedAxisKeys }];
                 });
 
-                changeView('comparison');
+                const axisSummary = normalizedAxisKeys.length > 0
+                    ? `${normalizedAxisKeys.length} axis${normalizedAxisKeys.length === 1 ? '' : 'es'}`
+                    : 'execution card';
+                setComparisonQueueStatus(`Queued ${axisSummary} from ${targetExecution.name}`);
+                if (comparisonStatusTimeoutRef.current) {
+                    clearTimeout(comparisonStatusTimeoutRef.current);
+                }
+                comparisonStatusTimeoutRef.current = setTimeout(() => setComparisonQueueStatus(''), 4000);
+            };
+
+            const openAxisSelectionPanel = (testCaseId, executionId, initialAxisKey = null) => {
+                const targetTestCase = testCases.find(tc => tc.id === testCaseId);
+                const targetExecution = targetTestCase?.executions.find(ex => ex.id === executionId);
+                if (!targetTestCase || !targetExecution) return;
+
+                const axisOptions = getComparableAxisOptions(targetExecution);
+                const existingEntry = comparisonExecutions.find(entry => entry.key === `${testCaseId}-${executionId}`);
+                let selectedAxisKeys = [...(existingEntry?.axisKeys || [])];
+                if (initialAxisKey && axisOptions.some(option => option.key === initialAxisKey) && !selectedAxisKeys.includes(initialAxisKey)) {
+                    selectedAxisKeys = [...selectedAxisKeys, initialAxisKey];
+                }
+                setAxisSelectionPanel({
+                    testCaseId,
+                    executionId,
+                    axisOptions,
+                    selectedAxisKeys,
+                    testCaseName: targetTestCase.name,
+                    executionName: targetExecution.name
+                });
+            };
+
+            const closeAxisSelectionPanel = () => setAxisSelectionPanel(null);
+
+            const toggleAxisSelection = (axisKey) => {
+                setAxisSelectionPanel(prev => {
+                    if (!prev) return prev;
+                    const isSelected = prev.selectedAxisKeys.includes(axisKey);
+                    const nextSelection = isSelected
+                        ? prev.selectedAxisKeys.filter(key => key !== axisKey)
+                        : [...prev.selectedAxisKeys, axisKey];
+                    return { ...prev, selectedAxisKeys: nextSelection };
+                });
+            };
+
+            const confirmAxisSelection = () => {
+                if (!axisSelectionPanel) return;
+                addToComparison(axisSelectionPanel.testCaseId, axisSelectionPanel.executionId, axisSelectionPanel.selectedAxisKeys);
+                closeAxisSelectionPanel();
+            };
+
+            const handleComparisonAxisToggle = (entryKey, axisKey, isEnabled) => {
+                setComparisonExecutions(prev => prev.map(entry => {
+                    if (entry.key !== entryKey) return entry;
+                    const axisSet = new Set(entry.axisKeys || []);
+                    if (isEnabled) {
+                        if (axisSet.has(axisKey)) return entry;
+                        axisSet.add(axisKey);
+                        trackAnalyticsEvent('axis_compare_added', { testCaseId: entry.testCaseId, executionId: entry.executionId, axisKey });
+                    } else {
+                        if (!axisSet.has(axisKey)) return entry;
+                        axisSet.delete(axisKey);
+                        trackAnalyticsEvent('axis_compare_removed', { testCaseId: entry.testCaseId, executionId: entry.executionId, axisKey });
+                    }
+                    return { ...entry, axisKeys: Array.from(axisSet) };
+                }));
+            };
+
+            const openComparisonInNewTab = () => {
+                if (typeof window === 'undefined') return;
+                const base = window.location.href.split('#')[0];
+                window.open(`${base}#comparison`, '_blank');
             };
 
             const removeFromComparison = (entryKey) => {
-                setComparisonExecutions(prev => prev.filter(entry => entry.key !== entryKey));
+                setComparisonExecutions(prev => {
+                    const entry = prev.find(item => item.key === entryKey);
+                    if (entry) {
+                        (entry.axisKeys || []).forEach(axisKey =>
+                            trackAnalyticsEvent('axis_compare_removed', { testCaseId: entry.testCaseId, executionId: entry.executionId, axisKey })
+                        );
+                    }
+                    return prev.filter(item => item.key !== entryKey);
+                });
             };
 
             // Update test case name
@@ -3164,6 +3404,74 @@
                 );
             };
 
+            const renderAxisSelectionPanel = () => {
+                if (!axisSelectionPanel) return null;
+                const { testCaseName, executionName, axisOptions, selectedAxisKeys } = axisSelectionPanel;
+                const hasAxisOptions = axisOptions.length > 0;
+                return (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-end z-40">
+                        <div className="w-full max-w-md bg-white h-full shadow-xl p-6 overflow-y-auto">
+                            <div className="flex items-start justify-between mb-4">
+                                <div>
+                                    <p className="text-xs uppercase text-gray-500 tracking-wide">Execution › {testCaseName} › {executionName} › Compare axes</p>
+                                    <h2 className="text-xl font-semibold mt-1">Select axes for comparison</h2>
+                                    <p className="text-sm text-gray-600">Pick multiple axes/directions before queueing them. You will stay on this execution after confirming.</p>
+                                </div>
+                                <button onClick={closeAxisSelectionPanel} className="text-gray-500 hover:text-gray-700">
+                                    <Icon name="x" />
+                                </button>
+                            </div>
+                            {hasAxisOptions ? (
+                                <div className="space-y-3">
+                                    {axisOptions.map(option => {
+                                        const checked = selectedAxisKeys.includes(option.key);
+                                        return (
+                                            <label key={option.key} className={`flex items-center justify-between border rounded-lg px-3 py-2 ${checked ? 'border-blue-400 bg-blue-50' : 'border-gray-200'}`}>
+                                                <div>
+                                                    <p className="font-semibold">Axis {option.key}</p>
+                                                    <p className="text-xs text-gray-500">{option.count} measurements available</p>
+                                                </div>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={() => toggleAxisSelection(option.key)}
+                                                    className="h-4 w-4"
+                                                />
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+                                    Tag at least one axis/direction in this execution before sending it to comparison.
+                                </div>
+                            )}
+                            <div className="mt-6 space-y-2">
+                                <button
+                                    onClick={confirmAxisSelection}
+                                    className="w-full px-4 py-2 rounded text-white bg-blue-600 hover:bg-blue-700"
+                                >
+                                    Add selection to comparison
+                                </button>
+                                <button
+                                    onClick={() => { closeAxisSelectionPanel(); changeView('comparison'); }}
+                                    className="w-full px-4 py-2 rounded border border-gray-200 text-gray-700 hover:bg-gray-50"
+                                >
+                                    Review comparison dashboard
+                                </button>
+                                <button
+                                    onClick={() => { closeAxisSelectionPanel(); openComparisonInNewTab(); }}
+                                    className="w-full px-4 py-2 rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
+                                >
+                                    Open comparison in new tab
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-4">Axis selections persist between sessions. You can also toggle axes directly from the comparison cards.</p>
+                        </div>
+                    </div>
+                );
+            };
+
             const renderCompareSessionsModal = () => {
                 if (!compareSessionsDialog) return null;
                 const baselineOption = executionOptions.find(opt => opt.value === compareSessionsDialog.baselineKey);
@@ -3353,6 +3661,37 @@
                                 <p className="text-xs md:text-sm text-yellow-700 mt-1">
                                     This import contains <span className="font-semibold">{ungroupedCount}</span> marker{ungroupedCount !== 1 ? 's' : ''} without axis/direction tags. Use the Ungrouped bucket below to assign an axis and direction so they appear in the correct sections.
                                 </p>
+                            </div>
+                        )}
+
+                        {comparisonExecutions.length > 0 && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 flex flex-wrap items-start gap-4">
+                                <div className="flex-1 min-w-[240px]">
+                                    <p className="text-xs uppercase font-semibold text-blue-700 tracking-wide">Comparison queue</p>
+                                    <p className="text-sm text-blue-900 mt-1">
+                                        Execution › {currentTestCase.name} › {currentExecution.name} › Compare axes
+                                    </p>
+                                    <p className="text-xs text-blue-800 mt-1">
+                                        Stay in this execution while we hold your axis selections. Jump to the dashboard when you are ready or open it in a new tab.
+                                    </p>
+                                    {comparisonQueueStatus && (
+                                        <p className="text-xs text-blue-900 font-semibold mt-1">{comparisonQueueStatus}</p>
+                                    )}
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => changeView('comparison')}
+                                        className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+                                    >
+                                        View comparison
+                                    </button>
+                                    <button
+                                        onClick={openComparisonInNewTab}
+                                        className="px-3 py-1.5 text-sm border border-blue-200 rounded text-blue-700 hover:bg-blue-100"
+                                    >
+                                        Open in new tab
+                                    </button>
+                                </div>
                             </div>
                         )}
 
@@ -3896,7 +4235,7 @@
                                                         </span>
                                                         {!isUngrouped && (
                                                             <button
-                                                                onClick={() => addToComparison(activeTestCase, activeExecution, axisKey)}
+                                                                onClick={() => openAxisSelectionPanel(activeTestCase, activeExecution, axisKey)}
                                                                 disabled={!axisHasComparableSamples}
                                                                 className={`inline-flex items-center gap-1 ${axisHasComparableSamples ? 'text-blue-600 hover:text-blue-800' : 'text-gray-400 cursor-not-allowed'}`}
                                                                 title={axisHasComparableSamples ? 'Add this axis to the comparison view' : 'No valid samples to compare'}
@@ -4192,8 +4531,8 @@
 
             // Render comparison view
             const renderComparisonView = () => {
-                const axisComparisonEntries = comparisonExecutions.filter(entry => entry.axisKey);
-                const axisOptions = Array.from(new Set(axisComparisonEntries.map(entry => entry.axisKey)));
+                const axisComparisonEntries = flattenAxisComparisonEntries(comparisonExecutions);
+                const axisOptions = getComparisonAxisOptions(comparisonExecutions);
                 const activeAxis = selectedComparisonAxis && axisOptions.includes(selectedComparisonAxis)
                     ? selectedComparisonAxis
                     : (axisOptions[0] || null);
@@ -4451,11 +4790,40 @@ Candidate: ${row.hardwareDiff.candidate}`}>
                                     const tc = testCases.find(testCase => testCase.id === comp.testCaseId);
                                     const ex = tc?.executions.find(exec => exec.id === comp.executionId);
 
-                                if (!tc || !ex) {
+                                    if (!tc || !ex) {
+                                        return (
+                                            <div key={comp.key} className="bg-white rounded-lg shadow p-4">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <p className="text-sm text-red-600">Execution not available</p>
+                                                    <button
+                                                        onClick={() => removeFromComparison(comp.key)}
+                                                        className="text-red-600 hover:text-red-800"
+                                                    >
+                                                        <Icon name="x" />
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-gray-500">Remove this card and add it again.</p>
+                                            </div>
+                                        );
+                                    }
+
+                                    const executionRequirements = mergeExecutionRequirements(ex.requirements);
+                                    const filteredTimestamps = ex.timestamps.filter(ts =>
+                                        !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
+                                    );
+                                    const stats = getStatistics(filteredTimestamps, executionRequirements);
+                                    const axisOptionsForCard = getComparableAxisOptions(ex);
+                                    const selectedAxes = comp.axisKeys || [];
+                                    const activeAxis = selectedComparisonAxis;
+
                                     return (
-                                        <div key={comp.key} className="bg-white rounded-lg shadow p-4">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <p className="text-sm text-red-600">Execution not available</p>
+                                        <div key={comp.key} className="bg-white rounded-lg shadow p-4 border border-blue-50">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div>
+                                                    <h3 className="font-semibold">{tc.name}</h3>
+                                                    <p className="text-sm text-gray-600">{ex.name}</p>
+                                                    <p className="text-xs text-gray-500">Axis selections persist across sessions.</p>
+                                                </div>
                                                 <button
                                                     onClick={() => removeFromComparison(comp.key)}
                                                     className="text-red-600 hover:text-red-800"
@@ -4463,92 +4831,76 @@ Candidate: ${row.hardwareDiff.candidate}`}>
                                                     <Icon name="x" />
                                                 </button>
                                             </div>
-                                            <p className="text-xs text-gray-500">Remove this card and add it again.</p>
-                                        </div>
-                                    );
-                                }
-
-                                const executionRequirements = mergeExecutionRequirements(ex.requirements);
-                                const filteredTimestamps = ex.timestamps.filter(ts => {
-                                    if (ts.isError || ts.latencyMs == null || ts.excludeFromStats) return false;
-                                    if (!comp.axisKey) return true;
-                                    return ts.axis && ts.direction && (ts.axis + ts.direction) === comp.axisKey;
-                                });
-                                const stats = getStatistics(filteredTimestamps, executionRequirements);
-                                const axisLabel = comp.axisKey ? `${comp.axisKey} axis` : 'All axes';
-                                const heading = comp.axisKey ? `${ex.name} · ${comp.axisKey}` : ex.name;
-                                const axisDistanceDetails = comp.axisKey ? getDistanceDetailsForAxisKey(tc, comp.axisKey) : null;
-                                const axisDistance = axisDistanceDetails?.value ?? null;
-                                const axisDistanceBadgeClass = axisDistanceDetails?.source === 'template'
-                                    ? 'bg-indigo-100 text-indigo-800'
-                                    : 'bg-emerald-100 text-emerald-800';
-                                const axisDistanceBadgeLabel = axisDistanceDetails?.source === 'template'
-                                    ? `Template${axisDistanceDetails?.templateName ? ` · ${axisDistanceDetails.templateName}` : ''}`
-                                    : 'Manual override';
-
-                                const isAxisCard = Boolean(comp.axisKey);
-                                const axisIsActive = isAxisCard && activeAxis && comp.axisKey === activeAxis;
-                                const cardBorderClass = isAxisCard
-                                    ? (axisIsActive ? 'border-2 border-blue-500' : 'border border-blue-100')
-                                    : 'border border-transparent';
-
-                                return (
-                                    <div key={comp.key} className={`bg-white rounded-lg shadow p-4 ${cardBorderClass}`}>
-                                        <div className="flex items-center justify-between mb-3">
-                                            <div>
-                                                <h3 className="font-semibold">{tc.name}</h3>
-                                                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
-                                                    <span>{heading}</span>
-                                                    {comp.axisKey && (
-                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${axisIsActive ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800'}`}>
-                                                            Axis {comp.axisKey}
-                                                        </span>
-                                                    )}
-                                                    {comp.axisKey && axisDistance !== null && (
-                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${axisDistanceBadgeClass}`}>
-                                                            {axisDistance}mm · {axisDistanceBadgeLabel}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <p className="text-xs text-gray-500">{axisLabel}</p>
-                                            </div>
-                                            <button
-                                                onClick={() => removeFromComparison(comp.key)}
-                                                className="text-red-600 hover:text-red-800"
-                                            >
-                                                <Icon name="x" />
-                                            </button>
-                                        </div>
-                                        {stats.total === 0 ? (
-                                            <p className="text-sm text-gray-500">No valid measurements available for this selection.</p>
-                                        ) : (
-                                            <div className="space-y-2 text-sm">
-                                                <div className="flex justify-between">
-                                                    <span className="text-gray-600">Min:</span>
-                                                    <span className="font-mono font-bold text-green-600">{formatMsToTime(stats.min)}</span>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span className="text-gray-600">Avg:</span>
-                                                    <span className="font-mono font-bold text-blue-600">{formatMsToTime(stats.avg)}</span>
-                                                </div>
-                                                <div className="flex justify-between">
-                                                    <span className="text-gray-600">Max:</span>
-                                                    <span className="font-mono font-bold text-red-600">{formatMsToTime(stats.max)}</span>
-                                                </div>
-                                                <div className="flex justify-between border-t pt-2">
-                                                    <span className="text-gray-600">Count:</span>
-                                                    <span className="font-bold">{stats.total}</span>
-                                                </div>
-                                                {executionRequirements.enabled && (
+                                            {stats.total === 0 ? (
+                                                <p className="text-sm text-gray-500">No valid measurements available for this execution.</p>
+                                            ) : (
+                                                <div className="space-y-2 text-sm">
+                                                    <div className="flex justify-between">
+                                                        <span className="text-gray-600">Min:</span>
+                                                        <span className="font-mono font-bold text-green-600">{formatMsToTime(stats.min)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-gray-600">Avg:</span>
+                                                        <span className="font-mono font-bold text-blue-600">{formatMsToTime(stats.avg)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-gray-600">Max:</span>
+                                                        <span className="font-mono font-bold text-red-600">{formatMsToTime(stats.max)}</span>
+                                                    </div>
                                                     <div className="flex justify-between border-t pt-2">
-                                                        <span className="text-gray-600">Pass Rate:</span>
-                                                        <span className="font-bold">{stats.passRate.toFixed(1)}%</span>
+                                                        <span className="text-gray-600">Count:</span>
+                                                        <span className="font-bold">{stats.total}</span>
+                                                    </div>
+                                                    {executionRequirements.enabled && (
+                                                        <div className="flex justify-between border-t pt-2">
+                                                            <span className="text-gray-600">Pass Rate:</span>
+                                                            <span className="font-bold">{stats.passRate.toFixed(1)}%</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                            <div className="mt-4 border-t pt-3 space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <p className="text-xs uppercase text-gray-500 tracking-wide">Axis filters</p>
+                                                    <button
+                                                        onClick={() => openAxisSelectionPanel(comp.testCaseId, comp.executionId)}
+                                                        className="text-xs text-blue-600 hover:text-blue-800"
+                                                    >
+                                                        Bulk edit
+                                                    </button>
+                                                </div>
+                                                {axisOptionsForCard.length === 0 ? (
+                                                    <p className="text-sm text-gray-500">No tagged axes yet. Assign directions in the execution view.</p>
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        {axisOptionsForCard.map(option => {
+                                                            const checked = selectedAxes.includes(option.key);
+                                                            return (
+                                                                <label key={option.key} className="flex items-center justify-between text-sm border rounded px-3 py-1.5">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <input
+                                                                            type="checkbox"
+                                                                            checked={checked}
+                                                                            onChange={(e) => handleComparisonAxisToggle(comp.key, option.key, e.target.checked)}
+                                                                        />
+                                                                        <span className="font-medium">{option.key}</span>
+                                                                        <span className="text-xs text-gray-500">{option.count} samples</span>
+                                                                        {activeAxis === option.key && (
+                                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs">Active</span>
+                                                                        )}
+                                                                    </div>
+                                                                </label>
+                                                            );
+                                                        })}
                                                     </div>
                                                 )}
+                                                <p className="text-xs text-gray-500">Checked axes feed the comparison matrix. Uncheck to hide them without leaving this page.</p>
+                                                {selectedAxes.length === 0 && (
+                                                    <p className="text-xs text-amber-700">No axes selected yet — toggle one above to start a comparison.</p>
+                                                )}
                                             </div>
-                                        )}
-                                    </div>
-                                );
+                                        </div>
+                                    );
                                 })}
                             </div>
                         </div>
@@ -4593,7 +4945,7 @@ Candidate: ${row.hardwareDiff.candidate}`}>
                                     </button>
                                     {currentTestCase && currentExecution && (
                                         <button
-                                            onClick={() => addToComparison(activeTestCase, activeExecution)}
+                                            onClick={() => openAxisSelectionPanel(activeTestCase, activeExecution)}
                                             disabled={!currentExecutionHasComparableSamples}
                                             title={currentExecutionHasComparableSamples ? 'Add the active execution to the comparison dashboard' : 'No valid latency measurements available for comparison'}
                                             className={`px-4 py-2 rounded ${currentExecutionHasComparableSamples ? 'bg-blue-700 hover:bg-blue-800' : 'bg-blue-300 cursor-not-allowed'}`}
@@ -4732,6 +5084,7 @@ Candidate: ${row.hardwareDiff.candidate}`}>
                         </div>
                     </div>
 
+                    {renderAxisSelectionPanel()}
                     {renderCompareSessionsModal()}
                     {renderImportModal()}
 
