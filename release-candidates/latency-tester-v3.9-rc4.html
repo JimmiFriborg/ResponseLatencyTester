@@ -492,6 +492,10 @@
                 return entries.sort((a, b) => a.label.localeCompare(b.label));
             }, [testCases]);
 
+            const comparisonAxisOptions = useMemo(() => {
+                return getComparisonAxisOptions(comparisonExecutions);
+            }, [comparisonExecutions]);
+
             const getExecutionSummaryForDiff = (ref) => {
                 if (!ref) return null;
                 const tc = testCases.find(testCase => testCase.id === ref.testCaseId);
@@ -5159,6 +5163,68 @@
                         {comparisonDataView === 'statistics' && renderStatisticsPanel()}
 
                         {comparisonDataView === 'cards' && (
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <h2 className="text-xl font-semibold">Execution Cards</h2>
+                                    {hasComparisonCards && (
+                                        <button
+                                            onClick={() => setComparisonExecutions([])}
+                                            className="text-sm text-red-600 hover:text-red-800"
+                                        >
+                                            Clear all
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {!hasComparisonCards && (
+                                        <div className="bg-white rounded-lg shadow p-4 text-gray-500 text-sm">
+                                            <p>No executions added to comparison yet.</p>
+                                            <p className="mt-1">Use "Add to Comparison" in the execution view to populate this dashboard.</p>
+                                        </div>
+                                    )}
+                                    {comparisonExecutions.map(comp => {
+                                    const tc = testCases.find(testCase => testCase.id === comp.testCaseId);
+                                    const ex = tc?.executions.find(exec => exec.id === comp.executionId);
+
+                                    if (!tc || !ex) {
+                                        return (
+                                            <div key={comp.key} className="bg-white rounded-lg shadow p-4">
+                                                <div className="flex items-center justify-between mb-2">
+                                                    <p className="text-sm text-red-600">Execution not available</p>
+                                                    <button
+                                                        onClick={() => removeFromComparison(comp.key)}
+                                                        className="text-red-600 hover:text-red-800"
+                                                    >
+                                                        <Icon name="x" />
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-gray-500">Remove this card and add it again.</p>
+                                            </div>
+                                        );
+                                    }
+
+                                    const executionRequirements = mergeExecutionRequirements(ex.requirements);
+                                    const filteredTimestamps = ex.timestamps.filter(ts =>
+                                        !ts.isError && ts.latencyMs != null && !ts.excludeFromStats
+                                    );
+                                    const stats = getStatistics(filteredTimestamps, executionRequirements);
+                                    const selectedAxes = comp.axisKeys || [];
+                                    const uniqueSelectedAxes = Array.from(new Set(selectedAxes));
+                                    const activeAxis = selectedComparisonAxis;
+                                    const templateName = getRequirementTemplateById(ex.requirementTemplateId)?.name
+                                        || getRequirementTemplateById(tc.requirementTemplateId)?.name
+                                        || '';
+                                    const passFailStatus = (() => {
+                                        if (!executionRequirements.enabled || stats.total === 0) return 'not-applicable';
+                                        return stats.failed > 0 ? 'fail' : 'pass';
+                                    })();
+                                    const passFailMeta = {
+                                        pass: { label: 'Pass', icon: 'check-circle', classes: 'bg-emerald-100 text-emerald-800' },
+                                        fail: { label: 'Fail', icon: 'x-circle', classes: 'bg-rose-100 text-rose-700' },
+                                        'not-applicable': { label: 'No requirements', icon: 'minus-circle', classes: 'bg-gray-100 text-gray-600' }
+                                    }[passFailStatus];
+
+                        {comparisonDataView === 'cards' && (
                             <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 space-y-4">
                                 <div className="flex items-center justify-between">
                                     <div>
@@ -5244,78 +5310,51 @@
                                                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-[11px] font-semibold">
                                                                     {templateName}
                                                                 </span>
-                                                            </div>
-                                                        )}
-                                                        <p className="text-xs text-gray-500 mt-1">Axis selections persist across sessions.</p>
+                                                            );
+                                                        })}
                                                     </div>
-                                                    <div className="flex flex-col items-end gap-1 text-xs">
-                                                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${passFailMeta.classes}`}>
-                                                            <Icon name={passFailMeta.icon} /> {passFailMeta.label}
-                                                        </span>
-                                                        <button
-                                                            onClick={() => removeAxisFromComparison(axisEntry.entryKey, axisKey)}
-                                                            className="inline-flex items-center gap-1 text-red-600 hover:text-red-800"
-                                                        >
-                                                            <Icon name="trash-2" /> Remove axis
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div className="mt-3 flex flex-wrap items-center gap-2">
-                                                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-blue-600 text-white text-sm font-semibold">{axisKey}</span>
-                                                    <span className={`inline-flex flex-col px-3 py-1 rounded-lg border text-xs ${distanceTone}`}>
-                                                        <span className="font-semibold text-sm">Distance</span>
-                                                        <span>{distanceLabel}</span>
-                                                    </span>
-                                                </div>
-                                                {axisStats.total === 0 ? (
-                                                    <p className="text-sm text-gray-500 mt-3">No valid test runs recorded for this axis yet.</p>
                                                 ) : (
-                                                    <div className="mt-3 space-y-2 text-sm">
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-600">Min:</span>
-                                                            <span className="font-mono font-bold text-green-600">{formatMsToTime(axisStats.min)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-600">Avg:</span>
-                                                            <span className="font-mono font-bold text-blue-600">{formatMsToTime(axisStats.avg)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-600">Max:</span>
-                                                            <span className="font-mono font-bold text-red-600">{formatMsToTime(axisStats.max)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between border-t pt-2">
-                                                            <span className="text-gray-600">Test runs:</span>
-                                                            <span className="font-bold">{axisStats.total}</span>
-                                                        </div>
-                                                        {axisStats.errorCount > 0 && (
-                                                            <div className="flex justify-between">
-                                                                <span className="text-gray-600">Errors flagged:</span>
-                                                                <span className="font-bold text-amber-700">{axisStats.errorCount}</span>
-                                                            </div>
-                                                        )}
-                                                        {executionRequirements.enabled && (
-                                                            <div className="flex justify-between border-t pt-2">
-                                                                <span className="text-gray-600">Pass rate:</span>
-                                                                <span className="font-bold">{axisStats.passRate.toFixed(1)}%</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
+                                                    <p className="text-xs text-amber-700 mt-1">No axes selected yet — use the execution view checkboxes to add one.</p>
                                                 )}
-                                                <div className="mt-4 border-t pt-3 flex flex-wrap items-center justify-between gap-3 text-xs">
-                                                    <div>
-                                                        <p className="uppercase tracking-wide text-gray-500">Axis controls</p>
-                                                        <button
-                                                            onClick={() => openAxisSelectionPanel(axisEntry.testCaseId, axisEntry.executionId, axisKey)}
-                                                            className="text-blue-600 hover:text-blue-800 font-semibold mt-1"
-                                                        >
-                                                            Adjust selection
-                                                        </button>
+                                            </div>
+                                            {stats.total === 0 ? (
+                                                <p className="text-sm text-gray-500">No valid measurements available for this execution.</p>
+                                            ) : (
+                                                <div className="space-y-2 text-sm">
+                                                    <div className="flex justify-between">
+                                                        <span className="text-gray-600">Min:</span>
+                                                        <span className="font-mono font-bold text-green-600">{formatMsToTime(stats.min)}</span>
                                                     </div>
-                                                    <div className="text-right text-gray-500">
-                                                        <p>Dataset: {describeDatasetSource(ex.datasetSource || 'manual-entry')}</p>
-                                                        <p>Test runs recorded: {axisStats.total}</p>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-gray-600">Avg:</span>
+                                                        <span className="font-mono font-bold text-blue-600">{formatMsToTime(stats.avg)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span className="text-gray-600">Max:</span>
+                                                        <span className="font-mono font-bold text-red-600">{formatMsToTime(stats.max)}</span>
+                                                    </div>
+                                                    <div className="flex justify-between border-t pt-2">
+                                                        <span className="text-gray-600">Test runs:</span>
+                                                        <span className="font-bold">{stats.total}</span>
                                                     </div>
                                                 </div>
+                                            )}
+                                            <div className="mt-4 border-t pt-3 space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                    <p className="text-xs uppercase text-gray-500 tracking-wide">Axis selections</p>
+                                                    <button
+                                                        onClick={() => openAxisSelectionPanel(comp.testCaseId, comp.executionId)}
+                                                        className="text-xs text-blue-600 hover:text-blue-800"
+                                                    >
+                                                        Bulk edit
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-gray-500">
+                                                    Manage axes from the execution tables using the new per-axis checkboxes. Use bulk edit for quick adjustments without leaving this page.
+                                                </p>
+                                                {uniqueSelectedAxes.length === 0 && (
+                                                    <p className="text-xs text-amber-700">No axes selected yet — open the execution view to tag one.</p>
+                                                )}
                                             </div>
                                         );
                                     })}
