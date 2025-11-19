@@ -174,6 +174,7 @@
                 (entry?.axisKeys || []).forEach(axisKey => {
                     flattened.push({
                         key: `${entry.key}-${axisKey}`,
+                        entryKey: entry.key,
                         axisKey,
                         testCaseId: entry.testCaseId,
                         executionId: entry.executionId
@@ -357,6 +358,10 @@
             const importRef = useRef(null);
             const copyStatusTimeoutRef = useRef(null);
             const comparisonStatusTimeoutRef = useRef(null);
+
+            const comparisonAxisOptions = useMemo(() => {
+                return getComparisonAxisOptions(comparisonExecutions);
+            }, [comparisonExecutions]);
 
             const executionExists = (ref) => {
                 if (!ref) return false;
@@ -2415,17 +2420,37 @@
                 window.open(`${base}#comparison`, '_blank');
             };
 
-            const removeFromComparison = (entryKey) => {
-                setComparisonExecutions(prev => {
-                    const entry = prev.find(item => item.key === entryKey);
-                    if (entry) {
-                        (entry.axisKeys || []).forEach(axisKey =>
-                            trackAnalyticsEvent('axis_compare_removed', { testCaseId: entry.testCaseId, executionId: entry.executionId, axisKey })
-                        );
-                    }
-                    return prev.filter(item => item.key !== entryKey);
-                });
-            };
+        const removeFromComparison = (entryKey) => {
+            setComparisonExecutions(prev => {
+                const entry = prev.find(item => item.key === entryKey);
+                if (entry) {
+                    (entry.axisKeys || []).forEach(axisKey =>
+                        trackAnalyticsEvent('axis_compare_removed', { testCaseId: entry.testCaseId, executionId: entry.executionId, axisKey })
+                    );
+                }
+                return prev.filter(item => item.key !== entryKey);
+            });
+        };
+
+        const removeAxisFromComparison = (entryKey, axisKey) => {
+            if (!entryKey || !axisKey) return;
+            setComparisonExecutions(prev => prev.reduce((acc, entry) => {
+                if (entry.key !== entryKey) {
+                    acc.push(entry);
+                    return acc;
+                }
+                const remainingAxes = (entry.axisKeys || []).filter(key => key !== axisKey);
+                if (remainingAxes.length === (entry.axisKeys || []).length) {
+                    acc.push(entry);
+                    return acc;
+                }
+                trackAnalyticsEvent('axis_compare_removed', { testCaseId: entry.testCaseId, executionId: entry.executionId, axisKey });
+                if (remainingAxes.length > 0) {
+                    acc.push({ ...entry, axisKeys: remainingAxes });
+                }
+                return acc;
+            }, []));
+        };
 
             // Update test case name
             const updateTestCaseName = (testCaseId, newName) => {
@@ -4777,7 +4802,7 @@
                         .filter(Boolean)
                     : [];
 
-                const hasComparisonCards = comparisonExecutions.length > 0;
+                const hasComparisonCards = axisComparisonEntries.length > 0;
                 const formatStat = (stats, metric) => {
                     if (!stats || stats.total === 0) return '—';
                     return `${stats[metric].toFixed(2)}ms`;
@@ -5199,49 +5224,91 @@
                                         'not-applicable': { label: 'No requirements', icon: 'minus-circle', classes: 'bg-gray-100 text-gray-600' }
                                     }[passFailStatus];
 
-                                    return (
-                                        <div key={comp.key} className="bg-white rounded-lg shadow p-4 border border-blue-50">
-                                            <div className="flex items-center justify-between mb-3 gap-3">
-                                                <div className="min-w-0">
-                                                    <h3 className="font-semibold truncate">{tc.name}</h3>
-                                                    <p className="text-sm text-gray-600 truncate">{ex.name}</p>
-                                                    {templateName && (
-                                                        <div className="mt-1">
-                                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold">
-                                                                {templateName}
-                                                            </span>
-                                                        </div>
-                                                    )}
-                                                    <p className="text-xs text-gray-500">Axis selections persist across sessions.</p>
+                        {comparisonDataView === 'cards' && (
+                            <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h2 className="text-xl font-semibold">Axis Execution Cards</h2>
+                                        {hasComparisonCards && (
+                                            <p className="text-xs text-gray-500">Every queued axis renders independently for fast cross-device comparisons.</p>
+                                        )}
+                                    </div>
+                                    {hasComparisonCards && (
+                                        <button
+                                            onClick={() => setComparisonExecutions([])}
+                                            className="text-sm text-red-600 hover:text-red-800"
+                                        >
+                                            Clear all
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {!hasComparisonCards && (
+                                        <div className="bg-white rounded-lg shadow p-4 text-gray-500 text-sm">
+                                            <p>No axes have been added to comparison yet.</p>
+                                            <p className="mt-1">Use the execution table checkboxes to start building a comparison set.</p>
+                                        </div>
+                                    )}
+                                    {axisComparisonEntries.map(axisEntry => {
+                                        const tc = testCases.find(testCase => testCase.id === axisEntry.testCaseId);
+                                        const ex = tc?.executions.find(exec => exec.id === axisEntry.executionId);
+                                        const axisKey = axisEntry.axisKey;
+                                        const axis = axisKey?.[0];
+                                        const direction = axisKey?.[1];
+
+                                        if (!tc || !ex || !axis || !direction) {
+                                            return (
+                                                <div key={axisEntry.key} className="bg-white rounded-lg shadow p-4">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <p className="text-sm text-red-600">Axis selection unavailable</p>
+                                                        <button
+                                                            onClick={() => removeFromComparison(axisEntry.entryKey || axisEntry.key)}
+                                                            className="text-red-600 hover:text-red-800"
+                                                        >
+                                                            <Icon name="x" />
+                                                        </button>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500">Re-add this axis from the execution view.</p>
                                                 </div>
-                                                <div className="flex flex-col items-end gap-1 text-xs">
-                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${passFailMeta.classes}`}>
-                                                        <Icon name={passFailMeta.icon} /> {passFailMeta.label}
-                                                    </span>
-                                                    <button
-                                                        onClick={() => removeFromComparison(comp.key)}
-                                                        className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700"
-                                                    >
-                                                        <Icon name="trash-2" /> Remove
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div className="mt-3">
-                                                <p className="text-xs uppercase text-gray-500 tracking-wide">Tracked axes</p>
-                                                {uniqueSelectedAxes.length > 0 ? (
-                                                    <div className="mt-1 flex flex-wrap gap-2">
-                                                        {uniqueSelectedAxes.map(axisKey => {
-                                                            const badgeDistance = getDistanceDetailsForAxisKey(tc, axisKey);
-                                                            const distanceLabel = badgeDistance?.value != null ? `${badgeDistance.value}mm` : 'Distance n/a';
-                                                            const tone = badgeDistance?.source === 'manual'
-                                                                ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                                                                : badgeDistance?.source === 'template'
-                                                                    ? 'bg-indigo-50 text-indigo-900 border-indigo-200'
-                                                                    : 'bg-gray-50 text-gray-700 border-gray-200';
-                                                            return (
-                                                                <span key={axisKey} className={`inline-flex flex-col px-3 py-1 rounded-lg border text-xs ${tone}`}>
-                                                                    <span className="font-semibold text-sm">{axisKey}</span>
-                                                                    <span className="text-[11px]">{distanceLabel}</span>
+                                            );
+                                        }
+
+                                        const executionRequirements = mergeExecutionRequirements(ex.requirements);
+                                        const axisStats = getAxisStatistics(ex.timestamps, axis, direction, executionRequirements);
+                                        const templateName = getRequirementTemplateById(ex.requirementTemplateId)?.name
+                                            || getRequirementTemplateById(tc.requirementTemplateId)?.name
+                                            || '';
+                                        const axisPassStatus = (() => {
+                                            if (!executionRequirements.enabled || axisStats.total === 0) return 'not-applicable';
+                                            return axisStats.failed > 0 ? 'fail' : 'pass';
+                                        })();
+                                        const passFailMeta = {
+                                            pass: { label: 'Pass', icon: 'check-circle', classes: 'bg-emerald-100 text-emerald-800' },
+                                            fail: { label: 'Fail', icon: 'x-circle', classes: 'bg-rose-100 text-rose-700' },
+                                            'not-applicable': { label: 'No requirements', icon: 'minus-circle', classes: 'bg-gray-100 text-gray-600' }
+                                        }[axisPassStatus];
+                                        const badgeDistance = getDistanceDetailsForAxisKey(tc, axisKey);
+                                        const distanceLabel = badgeDistance?.value != null ? `${badgeDistance.value}mm` : 'Distance n/a';
+                                        const distanceTone = badgeDistance?.source === 'manual'
+                                            ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                                            : badgeDistance?.source === 'template'
+                                                ? 'bg-indigo-50 text-indigo-900 border-indigo-200'
+                                                : 'bg-gray-50 text-gray-700 border-gray-200';
+                                        const highlightCard = selectedComparisonAxis === axisKey;
+
+                                        return (
+                                            <div
+                                                key={axisEntry.key}
+                                                className={`bg-white rounded-lg shadow p-4 border border-blue-50 ${highlightCard ? 'ring-2 ring-blue-400' : ''}`}
+                                            >
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <p className="text-xs uppercase text-gray-500 tracking-wide">{tc.name}</p>
+                                                        <h3 className="font-semibold text-gray-900 truncate">{ex.name}</h3>
+                                                        {templateName && (
+                                                            <div className="mt-1">
+                                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-[11px] font-semibold">
+                                                                    {templateName}
                                                                 </span>
                                                             );
                                                         })}
@@ -5270,12 +5337,6 @@
                                                         <span className="text-gray-600">Test runs:</span>
                                                         <span className="font-bold">{stats.total}</span>
                                                     </div>
-                                                    {executionRequirements.enabled && (
-                                                        <div className="flex justify-between border-t pt-2">
-                                                            <span className="text-gray-600">Pass Rate:</span>
-                                                            <span className="font-bold">{stats.passRate.toFixed(1)}%</span>
-                                                        </div>
-                                                    )}
                                                 </div>
                                             )}
                                             <div className="mt-4 border-t pt-3 space-y-2">
@@ -5295,11 +5356,11 @@
                                                     <p className="text-xs text-amber-700">No axes selected yet — open the execution view to tag one.</p>
                                                 )}
                                             </div>
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })}
+                                </div>
                             </div>
-                        </div>
+                        )}
                     </div>
                 );
             };
