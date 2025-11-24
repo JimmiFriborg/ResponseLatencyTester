@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hardware Latency Tester v3.9 Release Candidate 4</title>
+    <title>Hardware Latency Tester v3.9 Release Candidate 5</title>
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -29,6 +29,61 @@
 <body>
     <div id="root"></div>
 
+    <script>
+        (() => {
+            const status = { ready: false, timeoutId: null };
+
+            const escapeHtml = (value = '') => value
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+
+            const showFatal = (message, detail) => {
+                const root = document.getElementById('root');
+                if (!root || root.dataset.failed === 'true') return;
+                root.dataset.failed = 'true';
+                root.innerHTML = `
+                    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#e5e7eb;">
+                        <div style="max-width:720px;width:100%;background:#111827;border:1px solid #1f2937;border-radius:12px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.35);">
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                                <span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:9999px;background:rgba(248,113,113,0.15);color:#f87171;font-weight:700;">!</span>
+                                <span style="font-size:18px;font-weight:700;">Hardware Latency Tester failed to load</span>
+                            </div>
+                            <p style="margin:0 0 12px 0;font-size:15px;color:#cbd5e1;">${escapeHtml(message)}</p>
+                            ${detail ? `<pre style="white-space:pre-wrap;font-size:13px;line-height:1.55;background:#0b1222;border:1px solid #1f2937;border-radius:10px;padding:12px;color:#cbd5e1;overflow:auto;">${escapeHtml(detail)}</pre>` : ''}
+                            <p style="margin:12px 0 0 0;font-size:13px;color:#94a3b8;">Ensure the release package stays intact (HTML alongside the <code>js</code> folder) and that CDN access is available for React, Tailwind, and Babel.</p>
+                        </div>
+                    </div>
+                `;
+            };
+
+            window.__latencyTesterMarkReady = () => {
+                status.ready = true;
+                if (status.timeoutId) {
+                    clearTimeout(status.timeoutId);
+                    status.timeoutId = null;
+                }
+            };
+
+            const scheduleFailSafe = () => {
+                status.timeoutId = window.setTimeout(() => {
+                    if (!status.ready) {
+                        showFatal('The interface did not initialize.', 'Check that all scripts are reachable and reload the page.');
+                    }
+                }, 3500);
+            };
+
+            window.addEventListener('DOMContentLoaded', scheduleFailSafe);
+            window.addEventListener('error', (event) => {
+                showFatal('A script error prevented the app from loading.', event?.message || 'Unknown script error');
+            });
+            window.addEventListener('unhandledrejection', (event) => {
+                showFatal('A runtime error prevented the app from loading.', event?.reason?.message || String(event?.reason || 'Unknown error'));
+            });
+        })();
+    </script>
+
     <script type="text/babel" data-presets="env,react">
         const { useState, useEffect, useRef, useMemo } = React;
         const sessionDiffUtils = window.LatencySessionDiff || {};
@@ -43,9 +98,9 @@
         const deriveSessionDiffStatus = sessionDiffUtils.deriveSessionDiffStatus || (() => ({ status: 'idle', message: 'Session diff helpers unavailable.' }));
         const CompareSessionsSummary = window.CompareSessionsSummary;
 
-        const RELEASE_VERSION = 'v3.9 RC4';
-        const DEFECT_REGISTER_FILE = 'v3.9-rc4-defects.json';
-        const DEFECT_EXPORT_FILENAME = 'v3.9-rc4-defects.json';
+        const RELEASE_VERSION = 'v3.9 RC5';
+        const DEFECT_REGISTER_FILE = 'v3.9-rc5-defects.json';
+        const DEFECT_EXPORT_FILENAME = 'v3.9-rc5-defects.json';
 
         const AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'];
         const AXES = ['X', 'Y', 'Z'];
@@ -3451,7 +3506,7 @@
                         <div className="bg-white rounded-lg shadow p-4 text-sm text-gray-600">
                             <p>
                                 The canonical defect register for this release candidate lives at
-                                <code className="mx-1 bg-gray-100 px-1 py-0.5 rounded">release-candidates/v3.9-rc4-defects.json</code>.
+                                <code className="mx-1 bg-gray-100 px-1 py-0.5 rounded">release-candidates/v3.9-rc5-defects.json</code>.
                                 You can edit that file directly in a text editor or synchronize it by importing and exporting
                                 from the GUI controls above.
                             </p>
@@ -5473,9 +5528,9 @@
                             <div className="flex items-center justify-between">
                                 <div>
                                     <h1 className="text-2xl font-bold">Hardware Latency Tester</h1>
-                                    <p className="text-blue-100 text-sm font-semibold">v3.9 Release Candidate 4 (Evaluation Only)</p>
+                                    <p className="text-blue-100 text-sm font-semibold">v3.9 Release Candidate 5 (Evaluation Only)</p>
                                     <p className="text-xs text-amber-200 uppercase tracking-wide flex items-center gap-1">
-                                        <Icon name="alert-triangle" /> Release Candidate 4 - not approved for production
+                                        <Icon name="alert-triangle" /> Release Candidate 5 - not approved for production
                                     </p>
                                 </div>
                                 <div className="flex space-x-2">
@@ -5686,6 +5741,7 @@
         const container = document.getElementById('root');
         const root = ReactDOM.createRoot(container);
         root.render(<LatencyTester />);
+        window.__latencyTesterMarkReady?.();
     </script>
 </body>
 </html>

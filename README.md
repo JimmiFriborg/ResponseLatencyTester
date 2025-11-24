@@ -2,9 +2,20 @@
 
 A collection of self-contained Hardware Latency Tester builds (portable HTML+JS) together with the planning artifacts that document how each version evolved.
 
+## Table of Contents
+- [Functionality Overview](#functionality-overview)
+- [Usage Guide](#usage-guide)
+  - [Run the production build (v3.8.1)](#run-the-production-build-v381)
+  - [Evaluate the v3.9 Release Candidate](#evaluate-the-v39-release-candidate)
+  - [Work with legacy/portable builds](#work-with-legacyportable-builds)
+  - [Optional launch scripts](#optional-launch-scripts)
+- [Feature Set Timeline](#feature-set-timeline)
+- [Portable Runtime Notes](#portable-runtime-notes)
+- [Changelog (Summary)](#changelog-summary)
+
 ## Functionality Overview
 - **Latency execution workspace (production)** – `latency-tester-v3.8.1.html` remains the supported release for operations and certification work. It contains the multi-view React interface with FPS auto-detection, per-axis distances, grouped error handling, include/exclude toggles, and PDF-ready reporting. (See `v3.8-release-notes.md` for the full feature rundown.)
-- **Release candidate sandbox** – `release-candidates/latency-tester-v3.9-rc4.html` exposes the in-progress requirement template workflow along with the defect register view. It automatically reads/writes `release-candidates/v3.9-rc4-defects.json`, and the historical `v3.9-rc1-defects.json` document catalogs the backlog that fed this RC.
+- **Release candidate sandbox** – `release-candidates/latency-tester-v3.9-rc5.html` exposes the in-progress requirement template workflow along with the defect register view. It automatically reads/writes `release-candidates/v3.9-rc5-defects.json`, and the historical `v3.9-rc1-defects.json` document catalogs the backlog that fed this RC.
 - **Axis-aware comparison + FPS tuning** – RC4 keeps the axis comparison matrix introduced earlier while relocating the “Add to comparison” affordance into every execution/device row, emphasizing axis/distance badges on each comparison card, and exposing a dedicated pass/fail indicator so reviewers instantly understand what each card represents.
 - **Curated archives** – Deprecated HTML builds, the JSX playground, portable/offline variants, and legacy release notes now live under `archive/` (for example `archive/legacy-html/latency-tester-portable.html`). This keeps the repo root focused on the currently supported deliverables while still preserving history for reference.
 - **DaVinci Resolve marker support** – Timestamp parsing honors the marker naming convention introduced in v3.0, including axis/direction metadata extraction, automatic pairing, and error detection noted in the legacy feature guides stored in `archive/docs/`.
@@ -18,13 +29,17 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 4. Export CSV/JSON/PDF artifacts directly from the UI for archival or sharing.
 
 ### Evaluate the v3.9 Release Candidate
-1. Navigate to `release-candidates/` and open `latency-tester-v3.9-rc4.html`.
-2. Treat the UI banner and the dedicated **Defects** view as a reminder that this is not production software.
-3. Add, edit, or delete defects either directly inside the GUI or by editing `release-candidates/v3.9-rc4-defects.json`. The import/export buttons accept that JSON file so you can round-trip the canonical document without touching test-case data.
-4. Capture any new regressions in the defect register before promoting another RC.
+1. Navigate to `release-candidates/` and open `latency-tester-v3.9-rc5.html`.
+2. Watch for the startup overlay: if the bundle detects a problem booting the React app, it surfaces a fail-safe message instead of showing a blank page. Refresh after clearing cache if you encounter the overlay.
+3. Treat the UI banner and the dedicated **Defects** view as a reminder that this is not production software.
+4. Add, edit, or delete defects either directly inside the GUI or by editing `release-candidates/v3.9-rc5-defects.json`. The import/export buttons accept that JSON file so you can round-trip the canonical document without touching test-case data.
+5. Capture any new regressions in the defect register before promoting another RC.
 
-### Legacy portable & historical builds
-Legacy HTML builds (including the offline portable variant) now reside in `archive/legacy-html/`. When you need the Babel-enabled portable build, copy `archive/legacy-html/latency-tester-portable.html` alongside the `vendor/` directory before opening the file. The historical release notes and feature guides that describe those builds are located in `archive/docs/` for quick reference.
+### Work with legacy/portable builds
+Legacy HTML builds (including the offline portable variant) now reside in `archive/legacy-html/`.
+
+- When you need the Babel-enabled portable build, copy `archive/legacy-html/latency-tester-portable.html` alongside the `vendor/` directory before opening the file. This keeps runtime dependencies co-located for offline use.
+- The historical release notes and feature guides that describe those builds are located in `archive/docs/` for quick reference.
 
 ### Optional launch scripts
 - `launch.py` boots a lightweight static file server when you prefer to run the app from `http://localhost:8000/` instead of double-clicking the HTML file.
