@@ -1,0 +1,213 @@
+{
+  "release": "v3.9 RC5",
+  "lastUpdated": "2025-11-24T00:00:00Z",
+  "defects": [
+    {
+      "id": "DEF-001",
+      "title": "Requirement edits lost when switching test cases",
+      "description": "Switching test cases before saving a shared requirement template discards unsaved changes. Warn users or auto-save the template before navigation.",
+      "severity": "Medium",
+      "owner": "QA",
+      "status": "Resolved",
+      "lastUpdated": "2024-05-10T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-002",
+      "title": "Report tab omits template metadata",
+      "description": "Traceability report does not list the requirement template name being applied which makes auditing difficult.",
+      "severity": "Low",
+      "owner": "Systems",
+      "status": "Resolved",
+      "lastUpdated": "2024-05-10T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-003",
+      "title": "Manual distances ignored when templates also define ranges",
+      "description": "If a tester records axis distances inside a test case, the report and comparison views continue to show the template's \"must not respond\" range instead of the recorded override, making it impossible to validate the actual field measurements.",
+      "severity": "Medium",
+      "owner": "QA",
+      "status": "Resolved",
+      "lastUpdated": "2024-05-12T12:00:00.000Z"
+    },
+    {
+      "id": "DEF-004",
+      "title": "Comparison cards hide axis context",
+      "description": "When an execution is added to the comparison view with a specific axis filter, the card never shows which axis/direction or distance bounds were applied. Reviewers cannot tell why runs fail without opening the original test case.",
+      "severity": "Low",
+      "owner": "Systems",
+      "status": "Resolved",
+      "lastUpdated": "2025-11-18T08:58:35.748Z"
+    },
+    {
+      "id": "DEF-005",
+      "title": "Defect register search ignores IDs and severities",
+      "description": "The defect register only filters on titles/descriptions. QA cannot quickly isolate Critical defects or look up tickets by their ID, forcing manual scans of long lists.",
+      "severity": "Medium",
+      "owner": "QA",
+      "status": "Resolved",
+      "lastUpdated": "2024-05-12T12:00:00.000Z"
+    },
+    {
+      "id": "1763380200851_defect",
+      "title": "Requirement in Axis title",
+      "description": "In each individual Axis direction section (i.e. x+, y-) the \"Out of range\" requirement is appended to the title. But this is confusing as it indicates that is what we're testing against rather than the minimum requirement range. ",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Resolved",
+      "lastUpdated": "2025-11-18T09:01:46.496Z"
+    },
+    {
+      "id": "1763452540395_defect",
+      "title": "Comparison selection",
+      "description": "Compare Sessions in 3.9 RC3 shows a white blank page once clicking \"Apply Selection\". \nTo Reproduce: select a baseline and a candidate dataset, click apply and a blank page appears.",
+      "severity": "Critical",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T09:00:34.223Z"
+    },
+    {
+      "id": "1763452646021_defect",
+      "title": "Test Execution View too visually noise",
+      "description": "Test Execution information isn't clearly separated from Test Case information, so user has to tune unnecessary information it out. \nTest Case information is necessary for the test case, but shouldn't interfere with the test execution.\n- Group Test Case information together and get it a bit out of the way to put focus on test execution details.\n- Make it obvious what is Test Case information and what is Test Execution information",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:19:15.488Z"
+    },
+    {
+      "id": "1763453551728_defect",
+      "title": "Add comparison button poorly placed",
+      "description": "The Add to comparison button is placed in the head by the import/export buttons - This should be a Test execution specific button. \nComparisons should be available through the tests themselves or the hardware, both of which will automatically use the selected entity from which the button was pressed, as one of the comparisons",
+      "severity": "Low",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:19:14.742Z"
+    },
+    {
+      "id": "1763453792671_defect",
+      "title": "Importing data to existing execution",
+      "description": "allow imported data to be added to existing test execution. If data already exist in the selected execution, prompt to append the data, overwrite or cancel (allowing to create a new execution instead)",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:19:13.893Z"
+    },
+    {
+      "id": "1763453831656_defect",
+      "title": "Copy Test Case Details",
+      "description": "Add function to duplicate Test Case including Test Case information. Prompt if user want's to duplicate Test Execution data as well",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:17:49.270Z"
+    },
+    {
+      "id": "1763453852218_defect",
+      "title": "Copy Test Execution detailes",
+      "description": "When Creating new test executions inside a test case implement copying test details like Pass/Fail Requirements, Execution Hardware etc.",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:18:51.802Z"
+    },
+    {
+      "id": "1763454065553_defect",
+      "title": "Improve Add to comparison",
+      "description": "When Clicking on \"Compare Axis\" user is taken directly to the Compare view without option for staying or selecting more axes, forcing the user to navigate back to the Test Execution and selecting the next Axis. When all 6 axis directions are to be compared for multiple test executions, this is wasting a lot of time. \n\nSolution idea: When adding a Test Execution to comparisson, prompt user which axis they want to compare. Make it selectable from within the Comparison view as well (checkboxes) \n\nBasically the comparison view should allow for dynamically changing the selection of comparisons. Simply add a test execution to comparison and from the Execution Card, select which axes to show (appending to the execution card, not replacing it).\n\nEvaluate the best UX experience for solving this issue. Comparisons should be easy and functional.",
+      "severity": "Critical",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T09:02:39.376Z"
+    },
+    {
+      "id": "1763454478950_defect",
+      "title": "Hardware Bank vs Devices",
+      "description": "Menubar holds both a \"Hardware Bank\" and a \"Devices\" but seemingly only the \"Devices\" are used. Remove the Hardware Bank and ensure all necessary functionality is working correctly for \"Devices\"",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:51:44.129Z"
+    },
+    {
+      "id": "1763454576211_defect",
+      "title": "Device comparison",
+      "description": "Add a comparison option on Device page, allowing selection of executions with that specific device, or simply a different device, for comparison",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:51:44.679Z"
+    },
+    {
+      "id": "1763454669873_defect",
+      "title": "Defect button at bottom",
+      "description": "The \"New Defect\" button is placed on top, and with a long lists of defects, it's tedious to scroll up to add a new defect.\nCreate a New Defect button at the bottom. Or simply add a new row when the bottom one is being filled in.",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:51:45.312Z"
+    },
+    {
+      "id": "1763454930522_defect",
+      "title": "Comparisson Tags",
+      "description": "The requirement template tag shown on the execution cards on the comparison view shows the Maximum range and \"Template\" as well, which it really shouldn't (i.e. \"47mm \u00b7 Template \u00b7 Responsiveness Requirements\"). It should rather just show \"Responsiveness Requirements\" for this tag.",
+      "severity": "Low",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:51:45.976Z"
+    },
+    {
+      "id": "1763455074430_defect",
+      "title": "Execution Card \"Cross\"",
+      "description": "There's a big red cross on the top right of the execution cards in the comparison view - This is used as \"Remove\" from comparison, but looks like a \"Fail\" mark.\n\nChange the cross to actually be a pass/fail marker and add a more subtle \"Remove\" button further up in the top right corner",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:51:46.636Z"
+    },
+    {
+      "id": "1763455415262_defect",
+      "title": "Execution Run Terminology change",
+      "description": "When looking at the results of a test execution, the execution runs are named as Count in Execution Cards and in Test Report, and as Samples in the Axis Comparison Matrix - It must be named test runs.",
+      "severity": "Low",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:52:43.545Z"
+    },
+    {
+      "id": "1763455644662_defect",
+      "title": "Device Samples",
+      "description": "Testing is often performed on several samples of a device type. Add a sample count for devices essentially duplicating the device information, which is generic, but serial, name and notes must be allowed for each individual sample. Devices type are Test Case specific but Samples should be Test Execution specific (still allowing several samples for each execution though)",
+      "severity": "Medium",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:52:56.353Z"
+    },
+    {
+      "id": "1763455944945_defect",
+      "title": "Axis Comparison Matrix",
+      "description": "\"Distance\" is shown in the Axis Comparison Matrix but showing the max distance, not allowing for user to actually define which distance (min or out of range requirement) should be shown. Also, requirement Tag is shown, which it shouldn't be.",
+      "severity": "Low",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T08:55:15.917Z"
+    },
+    {
+      "id": "1763456573783_defect",
+      "title": "Add Defect IDs",
+      "description": "Defect IDs must be added to the far left of the Defect table",
+      "severity": "High",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T09:03:27.380Z"
+    },
+    {
+      "id": "1763456877560_defect",
+      "title": "Result Statistics view",
+      "description": "Add relevant statistic views like Distribution, Normal Distribution and other relevant data statistics (both graphs and numbers) relevant for analyzing and comparing testing of responsiveness latency at a distance (analyze and evaluate what makes best sense)\n\nMake sure that a comparison view allows to select whichever dataview is relevant and for which devices (Please analyze and evaluate what makes best sense for comparing axes, axes-directions, distances and response latency). Each ",
+      "severity": "Critical",
+      "owner": "Codex",
+      "status": "Open",
+      "lastUpdated": "2025-11-18T09:13:36.810Z"
+    }
+  ]
+}

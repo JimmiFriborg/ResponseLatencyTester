@@ -8,13 +8,13 @@ import * as ReactDOMClient from 'react-dom/client';
 import sessionDiff from '../release-candidates/js/session-diff.js';
 
 const htmlSource = readFileSync(
-  path.join(__dirname, '../release-candidates/latency-tester-v3.9-rc4.html'),
+  path.join(__dirname, '../release-candidates/latency-tester-v3.9-rc5.html'),
   'utf8'
 );
 const scriptMatches = [...htmlSource.matchAll(/<script type="text\/babel"[^>]*>([\s\S]*?)<\/script>/gi)];
 const inlineScript = scriptMatches.map(match => match[1]).filter(Boolean).pop() || '';
 
-describe('rc4 dashboard smoke test', () => {
+describe('rc5 dashboard smoke test', () => {
   it('mounts the Latency Tester React app without crashing', async () => {
     expect(inlineScript).not.toEqual('');
     const { code } = transformSync(inlineScript, {
