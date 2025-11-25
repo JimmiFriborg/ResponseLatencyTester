@@ -2,6 +2,11 @@
 
 This document captures the functional evolution of the Hardware Latency Tester family of builds that ship inside this repository.
 
+## [v4.0-dev] - Portable React/TypeScript rebuild
+- Establishes the React + TypeScript source of record in `src/`, bundled via Vite into a single-file `dist/latency-tester.html` portable artifact (no in-browser Babel dependency).
+- Splits the UI into dedicated Execution, Hardware, Comparison, Traceability, Requirements, Report, and Defects views with hash-based navigation anchors for direct linking.
+- Extracts CSV parsing, latency calculations, requirements evaluation, hardware normalization, session diffing, and versioned storage helpers into test-backed modules to keep domain logic centralized.
+
 ## [v4.0] - Planned
 - Introduces per-event axis capture plus axis performance dashboards in execution and comparison views, allowing every direction to be benchmarked without grouping constraints (see `v4.0-release-notes.md`).
 - Stores dedicated hardware assignments and requirement profiles per test case, keeping firmware, accessory, and threshold context with the exported data (`v4.0-release-notes.md`).
