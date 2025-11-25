@@ -1,5 +1,7 @@
 # Hardware Latency Tester - Portable Edition
 
+> **Note:** This guide documents the legacy Babel-enabled portable builds that now live under `archive/legacy-html/`. The active React/TypeScript source compiles from `app/` to a single `dist/latency-tester.html` via `npm run build` (run from within `app/`), which should be opened for the current portable experience.
+
 ## 🚀 Quick Start
 
 ### Option 1: Direct Browser (Easiest)
