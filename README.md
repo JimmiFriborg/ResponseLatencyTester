@@ -17,6 +17,7 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 - **Latency execution workspace (production)** – `latency-tester-v3.8.1.html` remains the supported release for operations and certification work. It contains the multi-view React interface with FPS auto-detection, per-axis distances, grouped error handling, include/exclude toggles, and PDF-ready reporting. (See `v3.8-release-notes.md` for the full feature rundown.)
 - **Release candidate sandbox** – `release-candidates/latency-tester-v3.9-rc5.html` exposes the in-progress requirement template workflow along with the defect register view. It automatically reads/writes `release-candidates/v3.9-rc5-defects.json`, and the historical `v3.9-rc1-defects.json` document catalogs the backlog that fed this RC.
 - **Axis-aware comparison + FPS tuning** – RC4 keeps the axis comparison matrix introduced earlier while relocating the “Add to comparison” affordance into every execution/device row, emphasizing axis/distance badges on each comparison card, and exposing a dedicated pass/fail indicator so reviewers instantly understand what each card represents.
+- **React/TypeScript source of record** – The v4 portable artifact is now built from the `src/` React + TypeScript project via Vite. Run `npm run build` to produce `dist/latency-tester.html`, a single self-contained file with no in-browser Babel dependency. The root-level `latency-tester.html` serves as the Vite entrypoint/template for local development and bundling.
 - **Curated archives** – Deprecated HTML builds, the JSX playground, portable/offline variants, and legacy release notes now live under `archive/` (for example `archive/legacy-html/latency-tester-portable.html`). This keeps the repo root focused on the currently supported deliverables while still preserving history for reference.
 - **DaVinci Resolve marker support** – Timestamp parsing honors the marker naming convention introduced in v3.0, including axis/direction metadata extraction, automatic pairing, and error detection noted in the legacy feature guides stored in `archive/docs/`.
 - **Reporting & exports** – v3.2 and later releases expose JSON/CSV/PDF exports, per-axis statistics, requirements compliance summaries, and distance-aware report layouts, enabling teams to adopt whichever artifact best fits their process (`v3.2-release-notes.md`, `v3.4-release-notes.md`).
@@ -27,6 +28,11 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 2. Import DaVinci Resolve CSV exports or JSON bundles via the import controls.
 3. Capture manual axis distances, configure requirements, and curate which test cases should appear in the printable report view.
 4. Export CSV/JSON/PDF artifacts directly from the UI for archival or sharing.
+
+### Build the React/TypeScript source (v4 portable)
+1. Run `npm install` once to fetch the Vite + React toolchain.
+2. Execute `npm run build` to generate `dist/latency-tester.html`, a single-file portable bundle with all CSS/JS inlined (no in-browser Babel required). The checked-in `latency-tester.html` at the repo root is the Vite template used for this bundle; open the compiled file under `dist/` for the portable experience.
+3. Open `dist/latency-tester.html` directly or serve it from any static host; hash-based routes (`#execution`, `#hardware`, etc.) keep each view addressable.
 
 ### Evaluate the v3.9 Release Candidate
 1. Navigate to `release-candidates/` and open `latency-tester-v3.9-rc5.html`.
@@ -59,9 +65,9 @@ Legacy HTML builds (including the offline portable variant) now reside in `archi
 - Planning documents outline per-event axis capture, hardware profile binding, comparison intelligence, synchronized media engines (video + waveform), pattern recognition via templates, IndexedDB caching, and expanded export packaging (CSV/JSON/PDF/annotated video). See `v4.0-release-notes.md`, `v4.0-architecture.md`, and `v4.0-implementation-plan.md` for the design roadmap.
 
 ## Portable Runtime Notes
-- The portable build now embeds `vendor/babel-standalone.min.js` so JSX transforms run even when CDNs are blocked.
-- A guard script detects when Babel fails to load and shows actionable recovery guidance, preventing a blank screen when the runtime is missing.
-- Keep the HTML file and vendor directory together when sharing archives to guarantee full functionality.
+- The portable React/TypeScript build is bundled into a single HTML file via Vite; it does not depend on in-browser Babel transforms.
+- Legacy Babel-enabled HTML builds remain available under `archive/legacy-html/` alongside the historical `vendor/` directory. Those files are preserved for reference only and are no longer the source of record for new work.
+- Keep the compiled `dist/latency-tester.html` checked in so downstream users can open the portable artifact directly without invoking the build pipeline.
 
 ## Changelog (Summary)
 A detailed change log lives in [`CHANGELOG.md`](./CHANGELOG.md). The highlights below mirror that document:

@@ -1,13 +1,13 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import CompareSessionsSummary from '../release-candidates/js/compare-sessions-panel.jsx';
+import CompareSessionsSummary from '../src/components/comparison/CompareSessionsSummary';
 
 afterEach(() => cleanup());
 
 const buildProps = (overrides = {}) => {
-  const overrideDiff = overrides.sessionDiffData;
-  const overrideState = overrides.sessionDiffState;
+  const overrideDiff = (overrides as any).sessionDiffData;
+  const overrideState = (overrides as any).sessionDiffState;
 
   const sessionDiffData = overrideDiff === null ? null : {
     baseline: {
@@ -35,13 +35,13 @@ const buildProps = (overrides = {}) => {
     fpsDelta: -2,
     hardwareDiffers: true,
     ...(overrideDiff || {})
-  };
+  } as any;
 
   const sessionDiffState = {
     status: 'ready',
     message: '',
     ...(overrideState || {})
-  };
+  } as any;
 
   return {
     sessionDiffData,
@@ -55,7 +55,7 @@ const buildProps = (overrides = {}) => {
     formatStat: () => '10.00ms',
     formatDeltaMs: () => '+1.00ms',
     getDeltaBadgeClasses: () => 'bg-gray-100 text-gray-800',
-    Icon: ({ name }) => <span data-icon={name} />,
+    Icon: ({ name }: { name: string }) => <span data-icon={name} />,
     ...overrides
   };
 };
@@ -76,11 +76,7 @@ describe('CompareSessionsSummary', () => {
       sessionDiffData: null,
       sessionDiffState: { status: 'error', message: 'Baseline missing.' }
     });
-    render(
-      <CompareSessionsSummary
-        {...props}
-      />
-    );
+    render(<CompareSessionsSummary {...props} />);
 
     expect(screen.getByText(/Baseline missing/i)).toBeInTheDocument();
     const chooseButton = screen.getByRole('button', { name: /choose sessions/i });
