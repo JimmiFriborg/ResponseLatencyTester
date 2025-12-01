@@ -4,6 +4,7 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 
 ## Table of Contents
 - [Functionality Overview](#functionality-overview)
+- [Repository Status and Handoff](#repository-status-and-handoff)
 - [Usage Guide](#usage-guide)
   - [Run the production build (v3.8.1)](#run-the-production-build-v381)
   - [Evaluate the v3.9 Release Candidate](#evaluate-the-v39-release-candidate)
@@ -21,6 +22,12 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 - **Curated archives** – Deprecated HTML builds, the JSX playground, portable/offline variants, and legacy release notes now live under `archive/` (for example `archive/legacy-html/latency-tester-portable.html`). This keeps the repo root focused on the currently supported deliverables while still preserving history for reference.
 - **DaVinci Resolve marker support** – Timestamp parsing honors the marker naming convention introduced in v3.0, including axis/direction metadata extraction, automatic pairing, and error detection noted in the legacy feature guides stored in `archive/docs/`.
 - **Reporting & exports** – v3.2 and later releases expose JSON/CSV/PDF exports, per-axis statistics, requirements compliance summaries, and distance-aware report layouts, enabling teams to adopt whichever artifact best fits their process (`v3.2-release-notes.md`, `v3.4-release-notes.md`).
+
+## Repository Status and Handoff
+- **Production delivery** – `latency-tester-v3.8.1.html` remains the supported build for day-to-day certification work.
+- **Release-candidate sandbox** – The v3.9 RC HTML bundles and their defect registers stay under `release-candidates/` for regression analysis.
+- **React/TypeScript workspace** – The v4 portable experience ships from the `src/` React codebase and is bundled to `dist/latency-tester.html`. The navigation exposes Execution, Hardware, Comparison, Traceability, Requirements, Report, and Defects views, each reflected in the new [status and cleanup plan](./docs/project-status-and-cleanup.md).
+- **Archived guides** – Legacy DaVinci marker references and quick-reference docs live in `archive/docs/` to keep the root clean. Consult that directory when you need the older paired-marker guidance.
 
 ## Usage Guide
 ### Run the production build (v3.8.1)
