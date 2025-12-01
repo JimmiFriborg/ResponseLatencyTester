@@ -13,6 +13,16 @@ export const useHashRoute = (): [ViewKey, (view: ViewKey) => void] => {
   const [view, setView] = useState<ViewKey>(() => normalizeHash(window.location.hash || ''));
 
   useEffect(() => {
+    const raw = window.location.hash || '';
+    const normalized = normalizeHash(raw);
+    const sanitized = raw.replace('#', '').toLowerCase();
+    if (!raw || sanitized !== normalized) {
+      window.location.hash = `#${normalized}`;
+      setView(normalized);
+    }
+  }, []);
+
+  useEffect(() => {
     const handler = () => setView(normalizeHash(window.location.hash || ''));
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
