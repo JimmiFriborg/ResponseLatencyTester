@@ -28,6 +28,11 @@ A collection of self-contained Hardware Latency Tester builds (portable HTML+JS)
 3. Capture manual axis distances, configure requirements, and curate which test cases should appear in the printable report view.
 4. Export CSV/JSON/PDF artifacts directly from the UI for archival or sharing.
 
+### Build the React/TypeScript source (v4 portable)
+1. Run `npm install` once to fetch the Vite + React toolchain.
+2. Execute `npm run build` to generate `dist/latency-tester.html`, a single-file portable bundle with all CSS/JS inlined (no in-browser Babel required).
+3. Open `dist/latency-tester.html` directly or serve it from any static host; hash-based routes (`#execution`, `#hardware`, etc.) keep each view addressable.
+
 ### Evaluate the v3.9 Release Candidate
 1. Navigate to `release-candidates/` and open `latency-tester-v3.9-rc5.html`.
 2. Watch for the startup overlay: if the bundle detects a problem booting the React app, it surfaces a fail-safe message instead of showing a blank page. Refresh after clearing cache if you encounter the overlay.
