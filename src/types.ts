@@ -1,4 +1,4 @@
-import { AxisLatency } from './domain/latencyCalculations';
+import { ModuleLatency } from './domain/latencyCalculations';
 import { RequirementTemplate } from './domain/requirements';
 import { SessionDiffData } from './domain/sessionDiff';
 
@@ -16,7 +16,7 @@ export interface ExecutionSession {
   executionId: string;
   name: string;
   hardwareProfileId: string;
-  latencies: AxisLatency[];
+  latencies: ModuleLatency[];
   datasetSource: 'manual-entry' | 'manual-import' | 'automation-report';
   fps: number;
   notes?: string;

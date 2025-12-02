@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { parseCsv, CsvParseIssue } from '../domain/csvParser';
-import { deriveAxisLatencies } from '../domain/latencyCalculations';
+import { deriveModuleLatencies } from '../domain/latencyCalculations';
 import { ExecutionSession } from '../types';
 import ImportModal from '../components/modals/ImportModal';
 
@@ -24,7 +24,8 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ sessions, onAddSes
       sessions.map((session) => ({
         id: `${session.testCaseId}::${session.executionId}`,
         name: session.name,
-        axes: session.latencies.map((latency) => `${latency.axis} (${latency.stats.avg?.toFixed(1) ?? '—'}ms)`).join(', '),
+        modules: session.latencies
+          .map((latency) => `${latency.moduleUnderTest} (${latency.stats.avg?.toFixed(1) ?? '—'}ms)`).join(', '),
         datasetSource: session.datasetSource
       })),
     [sessions]
@@ -42,9 +43,10 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ sessions, onAddSes
       .map((record) => ({
         name: record.marker,
         timestampMs: record.timestampMs as number,
-        axis: record.comment || undefined
+        color: record.color,
+        comment: record.comment || undefined
       }));
-    const latencies = deriveAxisLatencies(markerEvents);
+    const latencies = deriveModuleLatencies(markerEvents);
     const newSession: ExecutionSession = {
       testCaseId: `csv-${Date.now()}`,
       executionId: 'import',
@@ -57,7 +59,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ sessions, onAddSes
     };
     onAddSession(newSession);
     setLastImportSummary(
-      `${parsed.records.length} markers parsed with ${parsed.mappingUsed.marker}/${parsed.mappingUsed.timecode} columns. ${latencies.length} axes detected.`
+      `${parsed.records.length} markers parsed with ${parsed.mappingUsed.marker}/${parsed.mappingUsed.timecode} columns. ${latencies.length} modules under test detected.`
     );
     setShowCsvModal(false);
   };
@@ -119,7 +121,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ sessions, onAddSes
           <thead>
             <tr>
               <th>Test Case</th>
-              <th>Axes</th>
+              <th>Modules Under Test</th>
               <th>Source</th>
             </tr>
           </thead>
@@ -127,7 +129,7 @@ export const ExecutionView: React.FC<ExecutionViewProps> = ({ sessions, onAddSes
             {sessionTable.map((row) => (
               <tr key={row.id}>
                 <td>{row.name}</td>
-                <td>{row.axes || '—'}</td>
+                <td>{row.modules || '—'}</td>
                 <td>{row.datasetSource}</td>
               </tr>
             ))}
