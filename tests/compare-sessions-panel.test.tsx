@@ -70,6 +70,75 @@ describe('CompareSessionsSummary', () => {
     expect(screen.getByText(/Add note/)).toBeInTheDocument();
   });
 
+  it('renders multiple module rows and highlights deltas', () => {
+    const props = buildProps({
+      sessionDiffData: {
+        baseline: {
+          testCaseName: 'Baseline Case',
+          executionName: 'Run 1'
+        },
+        candidate: {
+          testCaseName: 'Candidate Case',
+          executionName: 'Run 2'
+        },
+        modules: [
+          {
+            moduleKey: 'Input module',
+            baselineStats: { min: 10, avg: 12, max: 13, total: 3 },
+            candidateStats: { min: 11, avg: 13, max: 14, total: 3 },
+            delta: { min: 1, avg: 1, max: 1 }
+          },
+          {
+            moduleKey: 'Output module',
+            baselineStats: { min: 20, avg: 22, max: 23, total: 3 },
+            candidateStats: { min: 19, avg: 20, max: 21, total: 3 },
+            delta: { min: -1, avg: -2, max: -2 }
+          }
+        ],
+        fpsDelta: 0,
+        hardwareDiffers: false
+      } as any
+    });
+
+    render(<CompareSessionsSummary {...props} />);
+
+    expect(screen.getByText(/Input module/)).toBeInTheDocument();
+    expect(screen.getByText(/Output module/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Δ Avg/i)).toHaveLength(2);
+  });
+
+  it('handles missing or malformed module data with a friendly fallback', () => {
+    const props = buildProps({
+      sessionDiffData: {
+        baseline: { testCaseName: 'Baseline Case', executionName: 'Run 1' },
+        candidate: { testCaseName: 'Candidate Case', executionName: 'Run 2' },
+        modules: null,
+        fpsDelta: null,
+        hardwareDiffers: false
+      } as any
+    });
+
+    render(<CompareSessionsSummary {...props} />);
+
+    expect(screen.getByText(/No module data available/)).toBeInTheDocument();
+  });
+
+  it('surfaces guardrails when required session data is missing', () => {
+    const props = buildProps({
+      sessionDiffData: {
+        baseline: null,
+        candidate: null,
+        modules: [],
+        fpsDelta: null,
+        hardwareDiffers: false
+      } as any
+    });
+
+    render(<CompareSessionsSummary {...props} />);
+
+    expect(screen.getByText(/unable to render comparison details/i)).toBeInTheDocument();
+  });
+
   it('surfaces loading or error messaging when data is unavailable', async () => {
     const user = userEvent.setup();
     const props = buildProps({

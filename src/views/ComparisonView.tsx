@@ -37,6 +37,51 @@ const toSummary = (session: ExecutionSession): SessionSummary => ({
   }, {} as Record<string, any>)
 });
 
+const collectModuleKeys = (...sessions: (ExecutionSession | undefined | null)[]) => {
+  const moduleSet = new Set<string>();
+  sessions
+    .filter((session): session is ExecutionSession => !!session)
+    .forEach((session) => {
+      session.latencies.forEach((latency) => {
+        if (latency?.moduleUnderTest) {
+          moduleSet.add(latency.moduleUnderTest);
+        }
+      });
+    });
+  return Array.from(moduleSet.values());
+};
+
+class ComparePanelBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; message: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, message: error?.message || 'Unexpected comparison error.' };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('Compare panel rendering failed', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="notice" role="alert">
+          <p style={{ margin: '0 0 4px 0' }}>Unable to render Compare Sessions panel.</p>
+          <p style={{ margin: 0, color: '#475569' }}>{this.state.message}</p>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 const datasetLabel = (source?: string) => {
   switch (source) {
     case 'manual-entry':
@@ -67,7 +112,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
     return computeSessionDiffData({
       baseline: toSummary(baseline),
       candidate: toSummary(candidate),
-      moduleKeys: baseline.latencies.map((latency) => latency.moduleUnderTest)
+      moduleKeys: collectModuleKeys(baseline, candidate)
     });
   }, [baseline, candidate, mode]);
 
@@ -171,19 +216,21 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
         </div>
       </div>
 
-      <CompareSessionsSummary
-        sessionDiffData={diffData}
-        sessionDiffState={sessionDiffState}
-        copyDiffStatus={copyStatus}
-        onOpenModal={() => alert('Use the selectors above to change baseline/candidate.')}
-        onCopyDiff={copyDiff}
-        describeDatasetSource={datasetLabel}
-        diffAnnotations={annotations}
-        onAnnotateModule={annotateModule}
-        formatStat={(stats, metric) => formatMs(stats?.[metric] ?? null)}
-        formatDeltaMs={(value, suffix = ' ms') => describeDelta(value, suffix)}
-        getDeltaBadgeClasses={(value) => (value > 0 ? 'bg-amber-100' : 'bg-emerald-100')}
-      />
+      <ComparePanelBoundary key={`${selection?.baseline || 'none'}-${selection?.candidate || 'none'}`}>
+        <CompareSessionsSummary
+          sessionDiffData={diffData}
+          sessionDiffState={sessionDiffState}
+          copyDiffStatus={copyStatus}
+          onOpenModal={() => alert('Use the selectors above to change baseline/candidate.')}
+          onCopyDiff={copyDiff}
+          describeDatasetSource={datasetLabel}
+          diffAnnotations={annotations}
+          onAnnotateModule={annotateModule}
+          formatStat={(stats, metric) => formatMs(stats?.[metric] ?? null)}
+          formatDeltaMs={(value, suffix = ' ms') => describeDelta(value, suffix)}
+          getDeltaBadgeClasses={(value) => (value > 0 ? 'bg-amber-100' : 'bg-emerald-100')}
+        />
+      </ComparePanelBoundary>
     </div>
   );
 };
