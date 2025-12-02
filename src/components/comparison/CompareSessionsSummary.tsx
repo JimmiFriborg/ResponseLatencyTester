@@ -30,10 +30,30 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
   getDeltaBadgeClasses,
   Icon
 }) => {
-  const showSummary = sessionDiffState?.status === 'ready' && !!sessionDiffData;
+  const hasCompleteSessions = !!(sessionDiffData && sessionDiffData.baseline && sessionDiffData.candidate);
+  const modules = Array.isArray(sessionDiffData?.modules) ? sessionDiffData.modules : [];
+  const showSummary = sessionDiffState?.status === 'ready' && hasCompleteSessions;
   const statusMessage = sessionDiffState?.message || '';
   const statusTone = sessionDiffState?.status === 'error' ? 'text-red-600' : 'text-gray-600';
   const canCopy = showSummary;
+
+  if (sessionDiffData && !hasCompleteSessions) {
+    return (
+      <div className="card">
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Compare Sessions</h2>
+            <p style={{ margin: 0, color: '#475569' }}>
+              Pick baseline vs. candidate datasets (manual imports or automation reports) to calculate per-module deltas.
+            </p>
+          </div>
+        </div>
+        <div className="notice" role="alert" style={{ marginTop: 12 }}>
+          Unable to render comparison details because required session data is missing.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card">
@@ -106,14 +126,14 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {sessionDiffData.modules.length === 0 ? (
+                {modules.length === 0 ? (
                   <tr>
                     <td colSpan={5} style={{ textAlign: 'center', padding: 12 }}>
                       No module data available for the selected sessions.
                     </td>
                   </tr>
                 ) : (
-                  sessionDiffData.modules.map((row) => (
+                  modules.map((row) => (
                     <tr key={row.moduleKey}>
                       <td style={{ fontWeight: 600 }}>{row.moduleKey}</td>
                       <td style={{ textAlign: 'right', fontSize: 13, color: '#475569' }}>
