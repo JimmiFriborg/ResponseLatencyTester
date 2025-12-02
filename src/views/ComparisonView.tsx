@@ -103,6 +103,38 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
     return null;
   });
 
+  const availableSessionKeys = useMemo(
+    () => sessions.map((session) => encodeExecutionKey(session.testCaseId, session.executionId)),
+    [sessions]
+  );
+
+  const coerceSelectionFromQueue = (nextQueue: string[]) => {
+    if (nextQueue.length < 2) return null;
+    return { baseline: nextQueue[0], candidate: nextQueue[1] };
+  };
+
+  React.useEffect(() => {
+    if (availableSessionKeys.length === 0) return;
+
+    const sanitizedQueue = queue.filter((id) => availableSessionKeys.includes(id));
+    const nextQueue = sanitizedQueue.length > 0 ? sanitizedQueue : availableSessionKeys.slice(0, 2);
+
+    if (nextQueue.length !== queue.length || nextQueue.some((id, index) => id !== queue[index])) {
+      onUpdateQueue(nextQueue);
+    }
+
+    if (
+      !selection ||
+      !selection.baseline ||
+      !selection.candidate ||
+      !nextQueue.includes(selection.baseline) ||
+      !nextQueue.includes(selection.candidate)
+    ) {
+      const nextSelection = coerceSelectionFromQueue(nextQueue);
+      setSelection(nextSelection);
+    }
+  }, [availableSessionKeys, queue, selection, onUpdateQueue]);
+
   const baseline = useMemo(() => sessions.find((session) => encodeExecutionKey(session.testCaseId, session.executionId) === selection?.baseline), [selection, sessions]);
   const candidate = useMemo(() => sessions.find((session) => encodeExecutionKey(session.testCaseId, session.executionId) === selection?.candidate), [selection, sessions]);
 
