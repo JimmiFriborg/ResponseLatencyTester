@@ -9,16 +9,18 @@ import ReportView from './views/ReportView';
 import DefectsView from './views/DefectsView';
 import { useHashRoute } from './routing/useHashRoute';
 import { createVersionedStorage } from './domain/storage';
-import { deriveAxisLatencies } from './domain/latencyCalculations';
+import { deriveModuleLatencies } from './domain/latencyCalculations';
 import { ExecutionSession, RequirementTemplateState, ComparisonState } from './types';
 import { HardwareProfile } from './domain/hardwareNormalization';
 import { RequirementTemplate } from './domain/requirements';
 
 const seedMarkers = [
-  { name: 'TagOff X+', timestampMs: 0 },
-  { name: 'MotionStart X+', timestampMs: 34 },
-  { name: 'TagOff Y-', timestampMs: 10 },
-  { name: 'MotionStart Y-', timestampMs: 60 }
+  { name: 'Metadata', color: 'Yellow', comment: 'Primary module', timestampMs: 0 },
+  { name: 'TagOff', timestampMs: 10 },
+  { name: 'MotionStart', timestampMs: 42 },
+  { name: 'Metadata', color: 'Yellow', comment: 'Secondary module', timestampMs: 50 },
+  { name: 'TagOff', timestampMs: 60 },
+  { name: 'MotionStart', timestampMs: 95 }
 ];
 
 const buildSeedSession = (id: string, name: string, source: ExecutionSession['datasetSource'], hardwareProfileId: string): ExecutionSession => ({
@@ -26,7 +28,7 @@ const buildSeedSession = (id: string, name: string, source: ExecutionSession['da
   executionId: `${id}-run`,
   name,
   hardwareProfileId,
-  latencies: deriveAxisLatencies(seedMarkers),
+  latencies: deriveModuleLatencies(seedMarkers),
   datasetSource: source,
   fps: 60
 });
@@ -45,10 +47,10 @@ const templates: RequirementTemplate[] = [
   {
     id: 'template-1',
     name: 'Standard Latency Thresholds',
-    description: 'Baseline motion templates for common axes.',
+    description: 'Baseline latency templates for common modules under test.',
     thresholds: [
-      { axis: 'X+', maxMs: 45, label: 'Primary axis' },
-      { axis: 'Y-', maxMs: 50, label: 'Fallback axis' }
+      { axis: 'Primary module', maxMs: 45, label: 'Primary path' },
+      { axis: 'Secondary module', maxMs: 50, label: 'Fallback path' }
     ],
     revision: 3
   }

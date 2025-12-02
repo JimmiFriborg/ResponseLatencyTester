@@ -22,7 +22,7 @@ export const ReportView: React.FC<ReportViewProps> = ({ sessions }) => (
         <thead>
           <tr>
             <th>Execution</th>
-            <th>Axes</th>
+            <th>Modules</th>
             <th>FPS</th>
           </tr>
         </thead>
@@ -30,7 +30,11 @@ export const ReportView: React.FC<ReportViewProps> = ({ sessions }) => (
           {sessions.map((session) => (
             <tr key={`${session.testCaseId}::${session.executionId}`}>
               <td>{session.name}</td>
-              <td>{session.latencies.map((latency) => `${latency.axis}: ${latency.stats.avg?.toFixed(2) ?? '—'}ms`).join(', ')}</td>
+              <td>
+                {session.latencies
+                  .map((latency) => `${latency.moduleUnderTest}: ${latency.stats.avg?.toFixed(2) ?? '—'}ms`)
+                  .join(', ')}
+              </td>
               <td>{session.fps}</td>
             </tr>
           ))}

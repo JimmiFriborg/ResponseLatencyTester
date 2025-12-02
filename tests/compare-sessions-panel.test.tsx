@@ -24,9 +24,9 @@ const buildProps = (overrides = {}) => {
       fps: 58,
       hardwareSummary: 'Rig B'
     },
-    axes: [
+    modules: [
       {
-        axisKey: 'X+',
+        moduleKey: 'Input module',
         baselineStats: { min: 10, avg: 12, max: 13, total: 3 },
         candidateStats: { min: 11, avg: 13, max: 14, total: 3 },
         delta: { min: 1, avg: 1, max: 1 }
@@ -51,7 +51,7 @@ const buildProps = (overrides = {}) => {
     onCopyDiff: vi.fn(),
     describeDatasetSource: () => 'Manual Session',
     diffAnnotations: {},
-    onAnnotateAxis: vi.fn(),
+    onAnnotateModule: vi.fn(),
     formatStat: () => '10.00ms',
     formatDeltaMs: () => '+1.00ms',
     getDeltaBadgeClasses: () => 'bg-gray-100 text-gray-800',

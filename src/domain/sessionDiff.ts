@@ -1,4 +1,4 @@
-export interface AxisStats {
+export interface ModuleStats {
   min: number;
   avg: number;
   max: number;
@@ -13,13 +13,13 @@ export interface SessionSummary {
   datasetSource?: string;
   fps?: number | null;
   hardwareSummary?: string | null;
-  axisStats?: Record<string, AxisStats>;
+  moduleStats?: Record<string, ModuleStats>;
 }
 
-export interface AxisDiffRow {
-  axisKey: string;
-  baselineStats: AxisStats | null;
-  candidateStats: AxisStats | null;
+export interface ModuleDiffRow {
+  moduleKey: string;
+  baselineStats: ModuleStats | null;
+  candidateStats: ModuleStats | null;
   delta: {
     min: number | null;
     avg: number | null;
@@ -32,15 +32,11 @@ export interface AxisDiffRow {
 export interface SessionDiffData {
   baseline: SessionSummary;
   candidate: SessionSummary;
-  axes: AxisDiffRow[];
-  axisMap: Record<string, AxisDiffRow>;
-  axisAggregate: Record<string, { plus: AxisDiffRow | null; minus: AxisDiffRow | null }>;
+  modules: ModuleDiffRow[];
+  moduleMap: Record<string, ModuleDiffRow>;
   fpsDelta: number | null;
   hardwareDiffers: boolean;
 }
-
-export const DEFAULT_AXIS_KEYS = ['X+', 'X-', 'Y+', 'Y-', 'Z+', 'Z-'] as const;
-export const DEFAULT_AXES = ['X', 'Y', 'Z'] as const;
 
 export const encodeExecutionKey = (testCaseId?: string, executionId?: string): string => {
   if (!testCaseId || !executionId) return '';
@@ -54,7 +50,7 @@ export const decodeExecutionKey = (value?: string | null): { testCaseId: string;
   return { testCaseId, executionId };
 };
 
-const safeMetric = (stats: AxisStats | null | undefined, metric: keyof AxisStats): number | null => {
+const safeMetric = (stats: ModuleStats | null | undefined, metric: keyof ModuleStats): number | null => {
   if (!stats || stats.total === 0) return null;
   return stats[metric];
 };
@@ -62,19 +58,20 @@ const safeMetric = (stats: AxisStats | null | undefined, metric: keyof AxisStats
 export const computeSessionDiffData = ({
   baseline,
   candidate,
-  axisKeys = DEFAULT_AXIS_KEYS,
-  axes = DEFAULT_AXES
+  moduleKeys
 }: {
   baseline?: SessionSummary | null;
   candidate?: SessionSummary | null;
-  axisKeys?: readonly string[];
-  axes?: readonly string[];
+  moduleKeys?: readonly string[];
 }): SessionDiffData | null => {
   if (!baseline || !candidate) return null;
-  const uniqueAxisKeys = Array.from(new Set(axisKeys)).sort((a, b) => a.localeCompare(b));
-  const axesRows: AxisDiffRow[] = uniqueAxisKeys.map((axisKey) => {
-    const baselineStats = (baseline.axisStats || {})[axisKey] || null;
-    const candidateStats = (candidate.axisStats || {})[axisKey] || null;
+  const baselineKeys = Object.keys(baseline.moduleStats || {});
+  const candidateKeys = Object.keys(candidate.moduleStats || {});
+  const keys = moduleKeys || Array.from(new Set([...baselineKeys, ...candidateKeys]));
+  const uniqueModuleKeys = keys.sort((a, b) => a.localeCompare(b));
+  const modules: ModuleDiffRow[] = uniqueModuleKeys.map((moduleKey) => {
+    const baselineStats = (baseline.moduleStats || {})[moduleKey] || null;
+    const candidateStats = (candidate.moduleStats || {})[moduleKey] || null;
     const delta = {
       min:
         safeMetric(candidateStats, 'min') != null && safeMetric(baselineStats, 'min') != null
@@ -92,7 +89,7 @@ export const computeSessionDiffData = ({
     const fpsDelta = baseline.fps != null && candidate.fps != null ? candidate.fps - baseline.fps : null;
     const hardwareDiffers = (baseline.hardwareSummary || null) !== (candidate.hardwareSummary || null);
     return {
-      axisKey,
+      moduleKey,
       baselineStats,
       candidateStats,
       delta,
@@ -102,28 +99,14 @@ export const computeSessionDiffData = ({
         : null
     };
   });
-  const axisMap = axesRows.reduce<Record<string, AxisDiffRow>>((acc, row) => {
-    acc[row.axisKey] = row;
-    return acc;
-  }, {});
-  const axisAggregate = axes.reduce<Record<string, { plus: AxisDiffRow | null; minus: AxisDiffRow | null }>>((acc, axis) => {
-    const plusKey = `${axis}+`;
-    const minusKey = `${axis}-`;
-    if (axisMap[plusKey] || axisMap[minusKey]) {
-      acc[axis] = {
-        plus: axisMap[plusKey] || null,
-        minus: axisMap[minusKey] || null
-      };
-    }
-    return acc;
-  }, {});
-
   return {
     baseline,
     candidate,
-    axes: axesRows,
-    axisMap,
-    axisAggregate,
+    modules,
+    moduleMap: modules.reduce<Record<string, ModuleDiffRow>>((acc, row) => {
+      acc[row.moduleKey] = row;
+      return acc;
+    }, {}),
     fpsDelta: baseline.fps != null && candidate.fps != null ? candidate.fps - baseline.fps : null,
     hardwareDiffers: (baseline.hardwareSummary || null) !== (candidate.hardwareSummary || null)
   };
@@ -166,15 +149,13 @@ export const deriveSessionDiffStatus = ({
   if (!diffData) {
     return { status: 'loading', message: 'Calculating session deltas…' };
   }
-  if (Array.isArray(diffData.axes) && diffData.axes.length === 0) {
-    return { status: 'error', message: 'No comparable axis measurements were detected between the selected sessions.' };
+  if (Array.isArray(diffData.modules) && diffData.modules.length === 0) {
+    return { status: 'error', message: 'No comparable module measurements were detected between the selected sessions.' };
   }
   return { status: 'ready', message: '' };
 };
 
 export default {
-  DEFAULT_AXIS_KEYS,
-  DEFAULT_AXES,
   encodeExecutionKey,
   decodeExecutionKey,
   computeSessionDiffData,

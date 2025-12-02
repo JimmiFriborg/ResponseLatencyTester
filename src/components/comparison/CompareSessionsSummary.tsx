@@ -9,7 +9,7 @@ interface CompareSessionsSummaryProps {
   onCopyDiff: () => void;
   describeDatasetSource: (value?: string) => string;
   diffAnnotations: Record<string, string>;
-  onAnnotateAxis: (axis: string) => void;
+  onAnnotateModule: (moduleKey: string) => void;
   formatStat: (stats: any, metric: 'min' | 'avg' | 'max') => string;
   formatDeltaMs: (value: number | null, suffix?: string) => string;
   getDeltaBadgeClasses: (value: number) => string;
@@ -24,7 +24,7 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
   onCopyDiff,
   describeDatasetSource,
   diffAnnotations,
-  onAnnotateAxis,
+  onAnnotateModule,
   formatStat,
   formatDeltaMs,
   getDeltaBadgeClasses,
@@ -41,7 +41,7 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
         <div>
           <h2 style={{ margin: 0 }}>Compare Sessions</h2>
           <p style={{ margin: 0, color: '#475569' }}>
-            Pick baseline vs. candidate datasets (manual imports or automation reports) to calculate per-axis deltas.
+            Pick baseline vs. candidate datasets (manual imports or automation reports) to calculate per-module deltas.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -98,7 +98,7 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
             <table className="table">
               <thead>
                 <tr>
-                  <th>Axis</th>
+                  <th>Module Under Test</th>
                   <th style={{ textAlign: 'right' }}>Baseline</th>
                   <th style={{ textAlign: 'right' }}>Candidate</th>
                   <th style={{ textAlign: 'right' }}>Delta</th>
@@ -106,16 +106,16 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {sessionDiffData.axes.length === 0 ? (
+                {sessionDiffData.modules.length === 0 ? (
                   <tr>
                     <td colSpan={5} style={{ textAlign: 'center', padding: 12 }}>
-                      No axis data available for the selected sessions.
+                      No module data available for the selected sessions.
                     </td>
                   </tr>
                 ) : (
-                  sessionDiffData.axes.map((row) => (
-                    <tr key={row.axisKey}>
-                      <td style={{ fontWeight: 600 }}>{row.axisKey}</td>
+                  sessionDiffData.modules.map((row) => (
+                    <tr key={row.moduleKey}>
+                      <td style={{ fontWeight: 600 }}>{row.moduleKey}</td>
                       <td style={{ textAlign: 'right', fontSize: 13, color: '#475569' }}>
                         <div>Min: {formatStat(row.baselineStats, 'min')}</div>
                         <div>Avg: {formatStat(row.baselineStats, 'avg')}</div>
@@ -132,11 +132,11 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
                         <div>Δ Max {formatDeltaMs(row.delta.max)}</div>
                       </td>
                       <td>
-                        <button onClick={() => onAnnotateAxis(row.axisKey)}>
-                          {Icon ? <Icon name="pin" /> : null} {diffAnnotations[row.axisKey] ? 'Edit note' : 'Add note'}
+                        <button onClick={() => onAnnotateModule(row.moduleKey)}>
+                          {Icon ? <Icon name="pin" /> : null} {diffAnnotations[row.moduleKey] ? 'Edit note' : 'Add note'}
                         </button>
-                        {diffAnnotations[row.axisKey] ? (
-                          <p style={{ color: '#92400e', fontStyle: 'italic' }}>{diffAnnotations[row.axisKey]}</p>
+                        {diffAnnotations[row.moduleKey] ? (
+                          <p style={{ color: '#92400e', fontStyle: 'italic' }}>{diffAnnotations[row.moduleKey]}</p>
                         ) : null}
                       </td>
                     </tr>

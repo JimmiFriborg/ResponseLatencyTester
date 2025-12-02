@@ -26,8 +26,8 @@ const toSummary = (session: ExecutionSession): SessionSummary => ({
   datasetSource: session.datasetSource,
   fps: session.fps,
   hardwareSummary: session.hardwareProfileId,
-  axisStats: session.latencies.reduce((acc, latency) => {
-    acc[latency.axis] = {
+  moduleStats: session.latencies.reduce((acc, latency) => {
+    acc[latency.moduleUnderTest] = {
       min: latency.stats.min ?? 0,
       avg: latency.stats.avg ?? 0,
       max: latency.stats.max ?? 0,
@@ -64,7 +64,11 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
   const diffData = useMemo(() => {
     if (mode === 'simple-tags') return null;
     if (!baseline || !candidate) return null;
-    return computeSessionDiffData({ baseline: toSummary(baseline), candidate: toSummary(candidate), axisKeys: baseline.latencies.map((latency) => latency.axis) });
+    return computeSessionDiffData({
+      baseline: toSummary(baseline),
+      candidate: toSummary(candidate),
+      moduleKeys: baseline.latencies.map((latency) => latency.moduleUnderTest)
+    });
   }, [baseline, candidate, mode]);
 
   const sessionDiffState = deriveSessionDiffStatus({
@@ -89,16 +93,16 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
     }
   };
 
-  const annotateAxis = (axis: string) => {
-    const note = window.prompt('Add comparison note for ' + axis, annotations[axis] || '');
+  const annotateModule = (moduleKey: string) => {
+    const note = window.prompt('Add comparison note for ' + moduleKey, annotations[moduleKey] || '');
     if (note != null) {
-      setAnnotations({ ...annotations, [axis]: note });
+      setAnnotations({ ...annotations, [moduleKey]: note });
     }
   };
 
   const copyDiff = () => {
     if (!diffData) return;
-    const lines = diffData.axes.map((row) => `${row.axisKey}: Δ ${describeDelta(row.delta.avg)}`);
+    const lines = diffData.modules.map((row) => `${row.moduleKey}: Δ ${describeDelta(row.delta.avg)}`);
     navigator.clipboard.writeText(lines.join('\n')).then(() => setCopyStatus('Diff copied to clipboard.'));
   };
 
@@ -108,7 +112,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
         <h2 style={{ marginTop: 0 }}>Comparison</h2>
         <p style={{ color: '#475569' }}>
           Persisted comparison queue and mode live in versioned storage. Simple-tag mode disables comparison because only a
-          single marker is captured per axis and deltas cannot be derived.
+          single marker is captured per module under test and deltas cannot be derived.
         </p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <label>
@@ -175,7 +179,7 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({ sessions, queue,
         onCopyDiff={copyDiff}
         describeDatasetSource={datasetLabel}
         diffAnnotations={annotations}
-        onAnnotateAxis={annotateAxis}
+        onAnnotateModule={annotateModule}
         formatStat={(stats, metric) => formatMs(stats?.[metric] ?? null)}
         formatDeltaMs={(value, suffix = ' ms') => describeDelta(value, suffix)}
         getDeltaBadgeClasses={(value) => (value > 0 ? 'bg-amber-100' : 'bg-emerald-100')}
