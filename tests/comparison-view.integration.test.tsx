@@ -9,7 +9,7 @@ const buildSession = (id: string, name: string, samples: number[]): ExecutionSes
   testCaseId: id,
   executionId: `${id}-run`,
   name,
-  hardwareProfileId: 'rig-a',
+  deviceProfileId: 'rig-a',
   latencies: [
     {
       moduleUnderTest: 'Input module',

@@ -27,4 +27,18 @@ describe('hash routing', () => {
     await waitFor(() => expect(window.location.hash).toBe('#execution'));
     expect(screen.getByTestId('view').textContent).toBe('execution');
   });
+
+  it('accepts the canonical #devices hash', async () => {
+    window.location.hash = '#devices';
+    render(<Probe />);
+    await waitFor(() => expect(window.location.hash).toBe('#devices'));
+    expect(screen.getByTestId('view').textContent).toBe('devices');
+  });
+
+  it('redirects legacy #hardware hashes to #devices', async () => {
+    window.location.hash = '#hardware';
+    render(<Probe />);
+    await waitFor(() => expect(window.location.hash).toBe('#devices'));
+    expect(screen.getByTestId('view').textContent).toBe('devices');
+  });
 });

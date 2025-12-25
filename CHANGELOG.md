@@ -5,11 +5,11 @@ This document captures the functional evolution of the Hardware Latency Tester f
 ## [v4.0-dev] - Portable React/TypeScript rebuild
 - Establishes the React + TypeScript source of record in `src/`, bundled via Vite into a single-file `dist/latency-tester.html` portable artifact (no in-browser Babel dependency).
 - Splits the UI into dedicated Execution, Hardware, Comparison, Traceability, Requirements, Report, and Defects views with hash-based navigation anchors for direct linking.
-- Extracts CSV parsing, latency calculations, requirements evaluation, hardware normalization, session diffing, and versioned storage helpers into test-backed modules to keep domain logic centralized.
+- Extracts CSV parsing, latency calculations, requirements evaluation, device normalization, session diffing, and versioned storage helpers into test-backed modules to keep domain logic centralized.
 
 ## [v4.0] - Planned
 - Introduces per-event axis capture plus axis performance dashboards in execution and comparison views, allowing every direction to be benchmarked without grouping constraints (see `v4.0-release-notes.md`).
-- Stores dedicated hardware assignments and requirement profiles per test case, keeping firmware, accessory, and threshold context with the exported data (`v4.0-release-notes.md`).
+- Stores dedicated device assignments and requirement profiles per test case, keeping firmware, accessory, and threshold context with the exported data (`v4.0-release-notes.md`).
 - Comparison intelligence calls out requirement sources, pass/fail outcomes, and per-axis deltas so reviewers can reconcile multiple executions quickly (`v4.0-release-notes.md`).
 - Architecture/plan documents detail the upcoming media engine, marker management, pattern recognition, and export upgrades (video/waveform sync, WaveSurfer integration, template-based detection, FFmpeg.wasm packaging, etc.) as captured in `v4.0-architecture.md`.
 
@@ -28,7 +28,7 @@ This document captures the functional evolution of the Hardware Latency Tester f
 
 ## [v3.9-rc2] - Release Candidate 2
 - Spins up `release-candidates/latency-tester-v3.9-rc2.html`, clearly labeling the UI as the second RC build so it is not deployed in production workflows.
-- Adds a reusable hardware bank that mirrors the requirement template workflow, allowing executions and imports to pull device presets instead of re-typing metadata each time.
+- Adds a reusable device library (formerly hardware bank) that mirrors the requirement template workflow, allowing executions and imports to pull device presets instead of re-typing metadata each time.
 - Refreshes the defect register to `release-candidates/v3.9-rc2-defects.json`, carrying the resolved template navigation and report metadata items that shipped earlier in RC1.
 
 ## [v3.9-rc] - Release Candidate

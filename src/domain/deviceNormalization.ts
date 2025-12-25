@@ -1,4 +1,4 @@
-export interface HardwareProfile {
+export interface DeviceProfile {
   id: string;
   name: string;
   tagType: string;
@@ -7,7 +7,7 @@ export interface HardwareProfile {
   notes?: string;
 }
 
-export const normalizeHardwareProfile = (profile: HardwareProfile): HardwareProfile => ({
+export const normalizeDeviceProfile = (profile: DeviceProfile): DeviceProfile => ({
   ...profile,
   name: profile.name.trim(),
   tagType: profile.tagType.trim(),
@@ -15,9 +15,9 @@ export const normalizeHardwareProfile = (profile: HardwareProfile): HardwareProf
   accessories: (profile.accessories || []).map((item) => item.trim()).filter(Boolean)
 });
 
-export const buildTraceabilitySummary = (profiles: HardwareProfile[]): string => {
-  if (!profiles.length) return 'No hardware traceability data captured yet.';
-  const normalized = profiles.map(normalizeHardwareProfile);
+export const buildTraceabilitySummary = (profiles: DeviceProfile[]): string => {
+  if (!profiles.length) return 'No device traceability data captured yet.';
+  const normalized = profiles.map(normalizeDeviceProfile);
   return normalized
     .map((profile) => `${profile.name} (${profile.tagType}${profile.firmware ? ` · FW ${profile.firmware}` : ''})`)
     .join(' • ');

@@ -2,10 +2,16 @@ import { useEffect, useState } from 'react';
 import { ViewKey } from '../types';
 
 const DEFAULT_VIEW: ViewKey = 'execution';
-const VALID_VIEWS: ViewKey[] = ['execution', 'hardware', 'comparison', 'traceability', 'requirements', 'report', 'defects'];
+const VALID_VIEWS: ViewKey[] = ['execution', 'devices', 'comparison', 'traceability', 'requirements', 'report', 'defects'];
+const LEGACY_VIEW_ALIASES: Record<string, ViewKey> = {
+  hardware: 'devices',
+  device: 'devices'
+};
 
 const normalizeHash = (hash: string): ViewKey => {
   const normalized = hash.replace('#', '').toLowerCase();
+  const alias = LEGACY_VIEW_ALIASES[normalized];
+  if (alias) return alias;
   return VALID_VIEWS.includes(normalized as ViewKey) ? (normalized as ViewKey) : DEFAULT_VIEW;
 };
 

@@ -9,9 +9,9 @@ interface NavigationProps {
 
 const NAV_ITEMS: { key: ViewKey; label: string }[] = [
   { key: 'execution', label: 'Execution' },
-  { key: 'hardware', label: 'Hardware Library' },
+  { key: 'devices', label: 'Device Library' },
   { key: 'comparison', label: 'Comparison' },
-  { key: 'traceability', label: 'Hardware Traceability' },
+  { key: 'traceability', label: 'Device Traceability' },
   { key: 'requirements', label: 'Requirements' },
   { key: 'report', label: 'Report' },
   { key: 'defects', label: 'Defects' }

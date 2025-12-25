@@ -132,7 +132,7 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
               <p style={{ margin: '4px 0', color: '#475569' }}>{describeDatasetSource(sessionDiffData.baseline.datasetSource)}</p>
               <p style={{ margin: '2px 0', color: '#475569' }}>FPS: {sessionDiffData.baseline.fps ?? '—'}</p>
               <p style={{ margin: '2px 0', color: '#475569' }}>
-                Hardware: {sessionDiffData.baseline.hardwareSummary || '—'}
+                Device: {sessionDiffData.baseline.deviceSummary || '—'}
               </p>
             </div>
             <div className="card" style={{ background: '#f8fafc' }}>
@@ -145,7 +145,7 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
               </p>
               <p style={{ margin: '2px 0', color: '#475569' }}>FPS: {sessionDiffData.candidate.fps ?? '—'}</p>
               <p style={{ margin: '2px 0', color: '#475569' }}>
-                Hardware: {sessionDiffData.candidate.hardwareSummary || '—'}
+                Device: {sessionDiffData.candidate.deviceSummary || '—'}
               </p>
             </div>
           </div>
@@ -157,8 +157,8 @@ export const CompareSessionsSummary: React.FC<CompareSessionsSummaryProps> = ({
               </span>
             </p>
           ) : null}
-          {sessionDiffData.hardwareDiffers ? (
-            <p style={{ color: '#92400e', fontSize: 13 }}>Hardware notes differ between the selected sessions.</p>
+          {sessionDiffData.deviceDiffers ? (
+            <p style={{ color: '#92400e', fontSize: 13 }}>Device notes differ between the selected sessions.</p>
           ) : null}
           <div style={{ overflowX: 'auto' }}>
             <table className="table">

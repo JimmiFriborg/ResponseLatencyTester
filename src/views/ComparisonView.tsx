@@ -25,7 +25,7 @@ const toSummary = (session: ExecutionSession): SessionSummary => ({
   executionName: session.executionId,
   datasetSource: session.datasetSource,
   fps: session.fps,
-  hardwareSummary: session.hardwareProfileId,
+  deviceSummary: session.deviceProfileId ?? (session as any).hardwareProfileId,
   moduleStats: session.latencies.reduce((acc, latency) => {
     acc[latency.moduleUnderTest] = {
       min: latency.stats.min ?? 0,
