@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Navigation from './components/Navigation';
 import ExecutionView from './views/ExecutionView';
-import HardwareView from './views/HardwareView';
+import DeviceView from './views/DeviceView';
 import ComparisonView from './views/ComparisonView';
 import TraceabilityView from './views/TraceabilityView';
 import RequirementsView from './views/RequirementsView';
@@ -11,7 +11,7 @@ import { useHashRoute } from './routing/useHashRoute';
 import { createVersionedStorage } from './domain/storage';
 import { deriveModuleLatencies } from './domain/latencyCalculations';
 import { ExecutionSession, RequirementTemplateState, ComparisonState } from './types';
-import { HardwareProfile } from './domain/hardwareNormalization';
+import { DeviceProfile } from './domain/deviceNormalization';
 import { RequirementTemplate } from './domain/requirements';
 
 const seedMarkers = [
@@ -23,11 +23,16 @@ const seedMarkers = [
   { name: 'MotionStart', timestampMs: 95 }
 ];
 
-const buildSeedSession = (id: string, name: string, source: ExecutionSession['datasetSource'], hardwareProfileId: string): ExecutionSession => ({
+const buildSeedSession = (
+  id: string,
+  name: string,
+  source: ExecutionSession['datasetSource'],
+  deviceProfileId: string
+): ExecutionSession => ({
   testCaseId: id,
   executionId: `${id}-run`,
   name,
-  hardwareProfileId,
+  deviceProfileId,
   latencies: deriveModuleLatencies(seedMarkers),
   datasetSource: source,
   fps: 60
@@ -38,7 +43,7 @@ const initialSessions: ExecutionSession[] = [
   buildSeedSession('case-2', 'Candidate Execution', 'manual-import', 'rig-b')
 ];
 
-const hardwareLibrary: HardwareProfile[] = [
+const deviceLibrary: DeviceProfile[] = [
   { id: 'rig-a', name: 'Rig A', tagType: 'Tag V2', firmware: '1.4.0', accessories: ['Grip'], notes: 'Primary capture rig' },
   { id: 'rig-b', name: 'Rig B', tagType: 'Tag V1', firmware: '1.2.1', accessories: ['Strap'], notes: 'Secondary validation rig' }
 ];
@@ -58,13 +63,50 @@ const templates: RequirementTemplate[] = [
 
 const comparisonStore = createVersionedStorage<ComparisonState>({
   key: 'latencyTesterComparisonQueue',
-  version: 2,
+  version: 3,
   migrations: {
     2: (data: any) => {
       if (Array.isArray(data)) {
         return { queue: data, mode: 'full', diffData: null } as ComparisonState;
       }
       return data;
+    },
+    3: (data: any) => {
+      const migrateSessionSummary = (summary?: any) =>
+        summary
+          ? {
+              ...summary,
+              deviceSummary: summary.deviceSummary ?? summary.hardwareSummary ?? null
+            }
+          : summary;
+
+      const migrateModule = (row: any) =>
+        row
+          ? {
+              ...row,
+              deviceDiff: row.deviceDiff ?? row.hardwareDiff ?? null
+            }
+          : row;
+
+      const migratedDiff = data?.diffData
+        ? {
+            ...data.diffData,
+            baseline: migrateSessionSummary(data.diffData.baseline),
+            candidate: migrateSessionSummary(data.diffData.candidate),
+            modules: Array.isArray(data.diffData.modules) ? data.diffData.modules.map(migrateModule) : [],
+            deviceDiffers: data.diffData.deviceDiffers ?? data.diffData.hardwareDiffers ?? false
+          }
+        : null;
+
+      const moduleMap = (migratedDiff?.modules || []).reduce<Record<string, any>>((acc, row: any) => {
+        acc[row.moduleKey] = row;
+        return acc;
+      }, {});
+
+      return {
+        ...data,
+        diffData: migratedDiff ? { ...migratedDiff, moduleMap } : migratedDiff
+      } as ComparisonState;
     }
   }
 });
@@ -94,8 +136,8 @@ export const App: React.FC = () => {
     switch (view) {
       case 'execution':
         return <ExecutionView sessions={sessions} onAddSession={addSession} onReplaceSessions={replaceSessions} />;
-      case 'hardware':
-        return <HardwareView profiles={hardwareLibrary} />;
+      case 'devices':
+        return <DeviceView profiles={deviceLibrary} />;
       case 'comparison':
         return (
           <ComparisonView
@@ -107,7 +149,7 @@ export const App: React.FC = () => {
           />
         );
       case 'traceability':
-        return <TraceabilityView sessions={sessions} profiles={hardwareLibrary} />;
+        return <TraceabilityView sessions={sessions} profiles={deviceLibrary} />;
       case 'requirements':
         return <RequirementsView state={requirements} onUpdate={setRequirements} />;
       case 'report':
@@ -122,10 +164,11 @@ export const App: React.FC = () => {
   return (
     <div className="app-shell">
       <header style={{ marginBottom: 12 }}>
-        <h1 style={{ marginBottom: 4 }}>Hardware Latency Tester v4.0</h1>
+        <h1 style={{ marginBottom: 4 }}>Device Latency Tester v4.0</h1>
         <p style={{ margin: 0, color: '#475569' }}>
           Source lives in React + TypeScript, bundled into a single portable latency-tester.html. Hash-based navigation keeps
-          views addressable (#execution, #hardware, #report, etc.).
+          views addressable (#execution, #devices for the device library, #report, etc.). Legacy #hardware hashes automatically
+          redirect to #devices for compatibility.
         </p>
       </header>
       <Navigation active={view} onNavigate={setView} comparisonMode={comparison.mode} />

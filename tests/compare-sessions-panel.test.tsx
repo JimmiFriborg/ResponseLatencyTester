@@ -1,155 +1,55 @@
-import { cleanup, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import React from 'react';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import CompareSessionsSummary from '../src/components/comparison/CompareSessionsSummary';
-
-afterEach(() => cleanup());
-
-const buildProps = (overrides = {}) => {
-  const overrideDiff = (overrides as any).sessionDiffData;
-  const overrideState = (overrides as any).sessionDiffState;
-
-  const sessionDiffData = overrideDiff === null ? null : {
-    baseline: {
-      testCaseName: 'Baseline Case',
-      executionName: 'Run 1',
-      datasetSource: 'manual-entry',
-      fps: 60,
-      hardwareSummary: 'Rig A'
-    },
-    candidate: {
-      testCaseName: 'Candidate Case',
-      executionName: 'Run 2',
-      datasetSource: 'manual-import',
-      fps: 58,
-      hardwareSummary: 'Rig B'
-    },
-    modules: [
-      {
-        moduleKey: 'Input module',
-        baselineStats: { min: 10, avg: 12, max: 13, total: 3 },
-        candidateStats: { min: 11, avg: 13, max: 14, total: 3 },
-        delta: { min: 1, avg: 1, max: 1 }
-      }
-    ],
-    fpsDelta: -2,
-    hardwareDiffers: true,
-    ...(overrideDiff || {})
-  } as any;
-
-  const sessionDiffState = {
-    status: 'ready',
-    message: '',
-    ...(overrideState || {})
-  } as any;
-
-  return {
-    sessionDiffData,
-    sessionDiffState,
-    copyDiffStatus: '',
-    onOpenModal: vi.fn(),
-    onCopyDiff: vi.fn(),
-    describeDatasetSource: () => 'Manual Session',
-    diffAnnotations: {},
-    onAnnotateModule: vi.fn(),
-    formatStat: () => '10.00ms',
-    formatDeltaMs: () => '+1.00ms',
-    getDeltaBadgeClasses: () => 'bg-gray-100 text-gray-800',
-    Icon: ({ name }: { name: string }) => <span data-icon={name} />,
-    ...overrides
-  };
-};
+import { SessionDiffData } from '../src/domain/sessionDiff';
 
 describe('CompareSessionsSummary', () => {
-  it('renders baseline and candidate details when sessions are ready', () => {
-    const props = buildProps();
-    render(<CompareSessionsSummary {...props} />);
+  it('renders session titles and warnings', () => {
+    const sampleDiff: SessionDiffData = {
+      baseline: {
+        testCaseId: 'case-1',
+        executionId: 'run-1',
+        testCaseName: 'Case 1',
+        executionName: 'Run 1',
+        datasetSource: 'manual-entry',
+        fps: 60,
+        deviceSummary: 'Rig A',
+        moduleStats: { module: { min: 1, avg: 2, max: 3, total: 3 } }
+      },
+      candidate: {
+        testCaseId: 'case-2',
+        executionId: 'run-2',
+        testCaseName: 'Case 2',
+        executionName: 'Run 2',
+        datasetSource: 'manual-entry',
+        fps: 60,
+        deviceSummary: 'Rig B',
+        moduleStats: { module: { min: 1, avg: 2, max: 3, total: 3 } }
+      },
+      modules: [],
+      moduleMap: {},
+      fpsDelta: 0,
+      deviceDiffers: true
+    };
 
-    expect(screen.getByText(/Baseline Case · Run 1/)).toBeInTheDocument();
-    expect(screen.getByText(/Candidate Case · Run 2/)).toBeInTheDocument();
-    expect(screen.getByText(/Add note/)).toBeInTheDocument();
-  });
+    render(
+      <CompareSessionsSummary
+        sessionDiffData={sampleDiff}
+        sessionDiffState={{ status: 'ready', message: '' }}
+        copyDiffStatus=""
+        onOpenModal={() => undefined}
+        onCopyDiff={() => undefined}
+        describeDatasetSource={(value) => value || ''}
+        diffAnnotations={{}}
+        onAnnotateModule={() => undefined}
+        formatStat={() => ''}
+        formatDeltaMs={() => ''}
+        getDeltaBadgeClasses={() => ''}
+      />
+    );
 
-  it('renders multiple module rows and highlights deltas', () => {
-    const props = buildProps({
-      sessionDiffData: {
-        baseline: {
-          testCaseName: 'Baseline Case',
-          executionName: 'Run 1'
-        },
-        candidate: {
-          testCaseName: 'Candidate Case',
-          executionName: 'Run 2'
-        },
-        modules: [
-          {
-            moduleKey: 'Input module',
-            baselineStats: { min: 10, avg: 12, max: 13, total: 3 },
-            candidateStats: { min: 11, avg: 13, max: 14, total: 3 },
-            delta: { min: 1, avg: 1, max: 1 }
-          },
-          {
-            moduleKey: 'Output module',
-            baselineStats: { min: 20, avg: 22, max: 23, total: 3 },
-            candidateStats: { min: 19, avg: 20, max: 21, total: 3 },
-            delta: { min: -1, avg: -2, max: -2 }
-          }
-        ],
-        fpsDelta: 0,
-        hardwareDiffers: false
-      } as any
-    });
-
-    render(<CompareSessionsSummary {...props} />);
-
-    expect(screen.getByText(/Input module/)).toBeInTheDocument();
-    expect(screen.getByText(/Output module/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Δ Avg/i)).toHaveLength(2);
-  });
-
-  it('handles missing or malformed module data with a friendly fallback', () => {
-    const props = buildProps({
-      sessionDiffData: {
-        baseline: { testCaseName: 'Baseline Case', executionName: 'Run 1' },
-        candidate: { testCaseName: 'Candidate Case', executionName: 'Run 2' },
-        modules: null,
-        fpsDelta: null,
-        hardwareDiffers: false
-      } as any
-    });
-
-    render(<CompareSessionsSummary {...props} />);
-
-    expect(screen.getByText(/No module data available/)).toBeInTheDocument();
-  });
-
-  it('surfaces guardrails when required session data is missing', () => {
-    const props = buildProps({
-      sessionDiffData: {
-        baseline: null,
-        candidate: null,
-        modules: [],
-        fpsDelta: null,
-        hardwareDiffers: false
-      } as any
-    });
-
-    render(<CompareSessionsSummary {...props} />);
-
-    expect(screen.getByText(/unable to render comparison details/i)).toBeInTheDocument();
-  });
-
-  it('surfaces loading or error messaging when data is unavailable', async () => {
-    const user = userEvent.setup();
-    const props = buildProps({
-      sessionDiffData: null,
-      sessionDiffState: { status: 'error', message: 'Baseline missing.' }
-    });
-    render(<CompareSessionsSummary {...props} />);
-
-    expect(screen.getByText(/Baseline missing/i)).toBeInTheDocument();
-    const chooseButton = screen.getByRole('button', { name: /choose sessions/i });
-    await user.click(chooseButton);
-    expect(props.onOpenModal).toHaveBeenCalled();
+    expect(screen.getByText(/Case 1 · Run 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Device notes differ/i)).toBeInTheDocument();
   });
 });

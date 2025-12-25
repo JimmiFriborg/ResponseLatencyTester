@@ -6,6 +6,6 @@ describe('app shell', () => {
   it('renders navigation with visible requirements entry and report layout', () => {
     render(<App />);
     expect(screen.getByRole('button', { name: /Requirements/i })).toBeInTheDocument();
-    expect(screen.getByText(/Hardware Latency Tester v4.0/)).toBeInTheDocument();
+    expect(screen.getByText(/Device Latency Tester v4.0/)).toBeInTheDocument();
   });
 });

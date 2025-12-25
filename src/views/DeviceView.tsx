@@ -1,19 +1,19 @@
 import React from 'react';
-import { HardwareProfile, buildTraceabilitySummary, normalizeHardwareProfile } from '../domain/hardwareNormalization';
+import { DeviceProfile, buildTraceabilitySummary, normalizeDeviceProfile } from '../domain/deviceNormalization';
 
-interface HardwareViewProps {
-  profiles: HardwareProfile[];
+interface DeviceViewProps {
+  profiles: DeviceProfile[];
 }
 
-export const HardwareView: React.FC<HardwareViewProps> = ({ profiles }) => {
-  const library = profiles.map(normalizeHardwareProfile);
+export const DeviceView: React.FC<DeviceViewProps> = ({ profiles }) => {
+  const library = profiles.map(normalizeDeviceProfile);
   const traceability = buildTraceabilitySummary(library);
 
   return (
     <div className="grid">
       <div className="card">
-        <h2 style={{ marginTop: 0 }}>Hardware Library</h2>
-        <p style={{ color: '#475569' }}>Curate profiles with clear tag, firmware, and accessory context.</p>
+        <h2 style={{ marginTop: 0 }}>Device Library</h2>
+        <p style={{ color: '#475569' }}>Curate device profiles with clear tag, firmware, and accessory context.</p>
         <table className="table">
           <thead>
             <tr>
@@ -37,12 +37,12 @@ export const HardwareView: React.FC<HardwareViewProps> = ({ profiles }) => {
       </div>
 
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>Hardware Traceability</h3>
-        <p style={{ color: '#475569' }}>Each execution references a profile, so audit history stays intact.</p>
+        <h3 style={{ marginTop: 0 }}>Device Traceability</h3>
+        <p style={{ color: '#475569' }}>Each execution references a device profile, so audit history stays intact.</p>
         <p>{traceability}</p>
       </div>
     </div>
   );
 };
 
-export default HardwareView;
+export default DeviceView;

@@ -4,7 +4,7 @@ import { SessionDiffData } from './domain/sessionDiff';
 
 export type ViewKey =
   | 'execution'
-  | 'hardware'
+  | 'devices'
   | 'comparison'
   | 'traceability'
   | 'requirements'
@@ -15,7 +15,7 @@ export interface ExecutionSession {
   testCaseId: string;
   executionId: string;
   name: string;
-  hardwareProfileId: string;
+  deviceProfileId: string;
   latencies: ModuleLatency[];
   datasetSource: 'manual-entry' | 'manual-import' | 'automation-report';
   fps: number;

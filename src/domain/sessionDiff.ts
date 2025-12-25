@@ -12,7 +12,7 @@ export interface SessionSummary {
   executionName: string;
   datasetSource?: string;
   fps?: number | null;
-  hardwareSummary?: string | null;
+  deviceSummary?: string | null;
   moduleStats?: Record<string, ModuleStats>;
 }
 
@@ -26,7 +26,7 @@ export interface ModuleDiffRow {
     max: number | null;
   };
   fpsDelta: number | null;
-  hardwareDiff: { baseline: string | null; candidate: string | null } | null;
+  deviceDiff: { baseline: string | null; candidate: string | null } | null;
 }
 
 export interface SessionDiffData {
@@ -35,7 +35,7 @@ export interface SessionDiffData {
   modules: ModuleDiffRow[];
   moduleMap: Record<string, ModuleDiffRow>;
   fpsDelta: number | null;
-  hardwareDiffers: boolean;
+  deviceDiffers: boolean;
 }
 
 export const encodeExecutionKey = (testCaseId?: string, executionId?: string): string => {
@@ -87,15 +87,15 @@ export const computeSessionDiffData = ({
           : null
     };
     const fpsDelta = baseline.fps != null && candidate.fps != null ? candidate.fps - baseline.fps : null;
-    const hardwareDiffers = (baseline.hardwareSummary || null) !== (candidate.hardwareSummary || null);
+    const deviceDiffers = (baseline.deviceSummary || null) !== (candidate.deviceSummary || null);
     return {
       moduleKey,
       baselineStats,
       candidateStats,
       delta,
       fpsDelta,
-      hardwareDiff: hardwareDiffers
-        ? { baseline: baseline.hardwareSummary || null, candidate: candidate.hardwareSummary || null }
+      deviceDiff: deviceDiffers
+        ? { baseline: baseline.deviceSummary || null, candidate: candidate.deviceSummary || null }
         : null
     };
   });
@@ -108,7 +108,7 @@ export const computeSessionDiffData = ({
       return acc;
     }, {}),
     fpsDelta: baseline.fps != null && candidate.fps != null ? candidate.fps - baseline.fps : null,
-    hardwareDiffers: (baseline.hardwareSummary || null) !== (candidate.hardwareSummary || null)
+    deviceDiffers: (baseline.deviceSummary || null) !== (candidate.deviceSummary || null)
   };
 };
 
